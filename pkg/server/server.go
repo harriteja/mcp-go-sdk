@@ -3,11 +3,12 @@ package server
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"go.uber.org/zap"
 
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
@@ -21,7 +22,7 @@ type Server struct {
 	name         string
 	version      string
 	instructions string
-	logger       *zap.Logger
+	logger       types.Logger
 
 	// Handlers
 	listToolsHandler             HandlerFunc[[]types.Tool]
@@ -41,23 +42,36 @@ type Options struct {
 	Name         string
 	Version      string
 	Instructions string
-	Logger       *zap.Logger
+	Logger       types.Logger
+	ServerInfo   types.Implementation
 }
 
 // New creates a new MCP server instance
-func New(opts Options) *Server {
-	logger := opts.Logger
-	if logger == nil {
-		logger, _ = zap.NewDevelopment()
+func New(opts *Options) (*Server, error) {
+	// Use provided logger or get the default logger
+	log := opts.Logger
+	if log == nil {
+		log = logger.GetDefaultLogger()
+	}
+
+	name := opts.Name
+	version := opts.Version
+
+	// Use ServerInfo if provided
+	if opts.ServerInfo.Name != "" {
+		name = opts.ServerInfo.Name
+	}
+	if opts.ServerInfo.Version != "" {
+		version = opts.ServerInfo.Version
 	}
 
 	return &Server{
-		name:         opts.Name,
-		version:      opts.Version,
+		name:         name,
+		version:      version,
 		instructions: opts.Instructions,
-		logger:       logger,
+		logger:       log,
 		sessions:     make(map[string]*Session),
-	}
+	}, nil
 }
 
 // OnListTools registers a handler for listing tools
@@ -111,10 +125,7 @@ func (s *Server) OnListResourceTemplates(handler HandlerFunc[[]types.ResourceTem
 
 // Initialize handles client initialization
 func (s *Server) Initialize(ctx context.Context, req *types.InitializeRequest) (*types.InitializeResponse, error) {
-	s.logger.Info("Initializing server",
-		zap.String("client_name", req.ClientInfo.Name),
-		zap.String("client_version", req.ClientInfo.Version),
-		zap.String("protocol_version", req.ProtocolVersion))
+	s.logger.Info(ctx, "server", "initialize", "Initializing server")
 
 	// Create new session
 	sessionID := uuid.New().String()
@@ -138,6 +149,33 @@ func (s *Server) Initialize(ctx context.Context, req *types.InitializeRequest) (
 		},
 		Instructions: s.instructions,
 	}, nil
+}
+
+// Initialized handles the notification that the client has completed initialization
+func (s *Server) Initialized(ctx context.Context, _ *types.InitializedNotification) error {
+	s.logger.Info(ctx, "server", "initialized", "Client has completed initialization")
+
+	// This method simply acknowledges that the client has completed initialization
+	// No specific response is needed as per the protocol
+	return nil
+}
+
+// Ping handles ping requests for health check/connectivity testing
+func (s *Server) Ping(ctx context.Context, req *types.PingRequest) (*types.PingResponse, error) {
+	// Respond with the current server timestamp and echo back the client timestamp if provided
+	return &types.PingResponse{
+		Timestamp:       req.Timestamp,
+		ServerTimestamp: time.Now().UnixNano() / int64(time.Millisecond),
+	}, nil
+}
+
+// Cancel handles cancellation requests for ongoing operations
+func (s *Server) Cancel(ctx context.Context, req *types.CancelRequest) error {
+	s.logger.Info(ctx, "server", "cancel", "Received cancellation request for request ID: "+req.ID)
+
+	// Note: Actual cancellation implementation would depend on how requests are tracked
+	// This is a placeholder implementation
+	return nil
 }
 
 // getSession retrieves a session by ID

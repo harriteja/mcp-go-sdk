@@ -9,14 +9,15 @@ import (
 	"net/http"
 	"time"
 
-	"go.uber.org/zap"
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
+	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
 // Client represents an HTTP transport client
 type Client struct {
 	client  *http.Client
 	baseURL string
-	logger  *zap.Logger
+	logger  types.Logger
 }
 
 // ClientOptions represents client configuration options
@@ -26,7 +27,7 @@ type ClientOptions struct {
 	// Timeout for requests
 	Timeout time.Duration
 	// Logger instance
-	Logger *zap.Logger
+	Logger types.Logger
 	// Transport for the HTTP client
 	Transport http.RoundTripper
 }
@@ -34,7 +35,7 @@ type ClientOptions struct {
 // NewClient creates a new HTTP transport client
 func NewClient(opts ClientOptions) *Client {
 	if opts.Logger == nil {
-		opts.Logger, _ = zap.NewProduction()
+		opts.Logger = logger.GetDefaultLogger()
 	}
 	if opts.Timeout == 0 {
 		opts.Timeout = 30 * time.Second
@@ -95,11 +96,8 @@ func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 	}
 
 	// Log request
-	c.logger.Debug("Sending request",
-		zap.String("method", req.Method),
-		zap.String("url", url),
-		zap.Any("headers", httpReq.Header),
-	)
+	c.logger.Info(ctx, "http", "client", fmt.Sprintf("Sending request - Method: %s, URL: %s",
+		req.Method, url))
 
 	// Send request
 	resp, err := c.client.Do(httpReq)
@@ -115,11 +113,8 @@ func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 	}
 
 	// Log response
-	c.logger.Debug("Received response",
-		zap.Int("status", resp.StatusCode),
-		zap.Int("body_size", len(respBody)),
-		zap.Any("headers", resp.Header),
-	)
+	c.logger.Info(ctx, "http", "client", fmt.Sprintf("Received response - Status: %d, Body size: %d bytes",
+		resp.StatusCode, len(respBody)))
 
 	return &Response{
 		StatusCode: resp.StatusCode,

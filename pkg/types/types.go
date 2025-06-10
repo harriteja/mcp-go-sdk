@@ -205,3 +205,29 @@ type InitializeResponse struct {
 	ServerInfo      Implementation     `json:"serverInfo"`
 	Instructions    string             `json:"instructions,omitempty"`
 }
+
+// InitializedNotification represents a notification that the client has completed initialization
+type InitializedNotification struct {
+	// This is intentionally empty as per the protocol specification
+	// It's a notification to confirm successful initialization
+}
+
+// PingRequest represents a ping request in MCP
+type PingRequest struct {
+	// Optional timestamp for round-trip measurements
+	Timestamp int64 `json:"timestamp,omitempty"`
+}
+
+// PingResponse represents a ping response in MCP
+type PingResponse struct {
+	// Echo back the timestamp from the request
+	Timestamp int64 `json:"timestamp,omitempty"`
+	// Server's timestamp at the time of processing
+	ServerTimestamp int64 `json:"serverTimestamp"`
+}
+
+// CancelRequest represents a request to cancel an ongoing operation
+type CancelRequest struct {
+	// ID of the request to cancel
+	ID string `json:"id"`
+}

@@ -15,7 +15,6 @@ import (
 	transporthttp "github.com/harriteja/mcp-go-sdk/pkg/server/transport/http"
 	"github.com/harriteja/mcp-go-sdk/pkg/server/transport/websocket"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
-	"go.uber.org/zap"
 )
 
 type testHandler struct {
@@ -54,7 +53,7 @@ func BenchmarkHTTPTransport(b *testing.B) {
 func BenchmarkWebSocketTransport(b *testing.B) {
 	// Create WebSocket server
 	server := websocket.New(websocket.Options{
-		Logger: logger.NewZapLogger(zap.NewNop(), &types.LoggerConfig{MinLevel: types.LogLevelInfo}),
+		Logger: logger.NewNopLogger(),
 	})
 
 	// Register echo handler
@@ -103,7 +102,7 @@ func BenchmarkWebSocketTransport(b *testing.B) {
 func BenchmarkWebSocketConcurrent(b *testing.B) {
 	// Create WebSocket server
 	server := websocket.New(websocket.Options{
-		Logger: logger.NewZapLogger(zap.NewNop(), &types.LoggerConfig{MinLevel: types.LogLevelInfo}),
+		Logger: logger.NewNopLogger(),
 	})
 
 	// Register echo handler
@@ -152,7 +151,7 @@ func BenchmarkWebSocketConcurrent(b *testing.B) {
 
 func BenchmarkHTTPConcurrentConnections(b *testing.B) {
 	// Create logger
-	testLogger := logger.NewZapLogger(zap.NewNop(), &types.LoggerConfig{MinLevel: types.LogLevelInfo})
+	testLogger := logger.NewNopLogger()
 
 	server := transporthttp.New(transporthttp.Options{
 		Address:      "localhost:0",

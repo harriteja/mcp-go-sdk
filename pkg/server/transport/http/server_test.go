@@ -5,115 +5,189 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/harriteja/mcp-go-sdk/pkg/logger"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
-	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 )
 
 func TestServer(t *testing.T) {
-	// Create test server
-	opts := Options{
-		Address:      ":8080",
+	// Create server with custom handler
+	server := NewServer(Options{
+		Logger:       logger.NewNopLogger(),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
-		IdleTimeout:  30 * time.Second,
-		Logger:       logger.NewZapLogger(zap.NewNop(), &types.LoggerConfig{MinLevel: types.LogLevelInfo}),
-	}
-	server := New(opts)
-
-	// Test handler registration
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	if err := server.RegisterHandler("/test", testHandler); err != nil {
-		t.Fatalf("Failed to register handler: %v", err)
-	}
 
-	// Test request handling
-	req := httptest.NewRequest("GET", "/test", nil)
-	w := httptest.NewRecorder()
-	server.handlers["/test"].ServeHTTP(w, req)
+	// Add handler for test requests
+	server.HandleFunc("test", func(w http.ResponseWriter, r *http.Request) {
+		// Extract request body
+		var request struct {
+			Value string `json:"value"`
+		}
+		err := json.NewDecoder(r.Body).Decode(&request)
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status code %d, got %d", http.StatusOK, w.Code)
-	}
+		// Write response
+		response := map[string]interface{}{
+			"echo": request.Value,
+		}
+		WriteJSON(w, http.StatusOK, response)
+	})
 
-	var response struct {
-		Result map[string]string `json:"result"`
-		Error  *types.Error      `json:"error"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
-		t.Fatalf("Failed to decode response: %v", err)
-	}
+	// Add handler for error responses
+	server.HandleFunc("error", func(w http.ResponseWriter, r *http.Request) {
+		WriteError(w, http.StatusBadRequest, "test error")
+	})
 
-	if response.Error != nil {
-		t.Errorf("Expected no error, got %v", response.Error)
-	}
+	// Test requests
+	t.Run("Valid request", func(t *testing.T) {
+		// Create test request
+		requestBody := map[string]interface{}{
+			"value": "test value",
+		}
+		requestBytes, _ := json.Marshal(requestBody)
+		req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(string(requestBytes)))
+		req.Header.Set("Content-Type", "application/json")
 
-	if response.Result["status"] != "ok" {
-		t.Errorf("Expected status 'ok', got %q", response.Result["status"])
-	}
+		// Record response
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, req)
+
+		// Check response
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		// Parse response body
+		var responseBody struct {
+			Result struct {
+				Echo string `json:"echo"`
+			} `json:"result"`
+		}
+		err := json.NewDecoder(resp.Body).Decode(&responseBody)
+		require.NoError(t, err)
+		assert.Equal(t, "test value", responseBody.Result.Echo)
+	})
+
+	t.Run("Error response", func(t *testing.T) {
+		// Create test request
+		req := httptest.NewRequest(http.MethodPost, "/error", nil)
+		req.Header.Set("Content-Type", "application/json")
+
+		// Record response
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, req)
+
+		// Check response
+		resp := w.Result()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+		// Parse response body
+		var responseBody struct {
+			Error struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		err := json.NewDecoder(resp.Body).Decode(&responseBody)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, responseBody.Error.Code)
+		assert.Equal(t, "test error", responseBody.Error.Message)
+	})
+
+	t.Run("Not found", func(t *testing.T) {
+		// Create test request for non-existent endpoint
+		req := httptest.NewRequest(http.MethodPost, "/nonexistent", nil)
+		req.Header.Set("Content-Type", "application/json")
+
+		// Record response
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, req)
+
+		// Check response
+		resp := w.Result()
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("Method not allowed", func(t *testing.T) {
+		// Create test request with wrong method
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Content-Type", "application/json")
+
+		// Record response
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, req)
+
+		// Check response
+		resp := w.Result()
+		assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+	})
 }
 
-func TestWriteError(t *testing.T) {
-	w := httptest.NewRecorder()
-	WriteError(w, http.StatusBadRequest, "test error")
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Expected status code %d, got %d", http.StatusBadRequest, w.Code)
+func TestTransport(t *testing.T) {
+	// Create mock MCP server
+	mockMCPServer := &mockMCPServer{
+		t: t,
+		listToolsHandler: func(ctx context.Context) ([]types.Tool, error) {
+			return []types.Tool{
+				{
+					Name:        "test-tool",
+					Description: "A test tool",
+				},
+			}, nil
+		},
 	}
 
-	var response struct {
-		Error *types.Error `json:"error"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
-		t.Fatalf("Failed to decode response: %v", err)
-	}
+	// Create HTTP transport
+	transport := NewTransport(mockMCPServer, logger.NewNopLogger())
 
-	if response.Error.Code != http.StatusBadRequest {
-		t.Errorf("Expected error code %d, got %d", http.StatusBadRequest, response.Error.Code)
-	}
+	// Create HTTP server
+	handler := transport.Handler()
+	server := httptest.NewServer(handler)
+	defer server.Close()
 
-	if response.Error.Message != "test error" {
-		t.Errorf("Expected error message %q, got %q", "test error", response.Error.Message)
-	}
-}
+	// Test ListTools request
+	t.Run("ListTools", func(t *testing.T) {
+		// Create request
+		request := Request{
+			ID:     "test-id",
+			Method: "listTools",
+		}
+		requestBytes, _ := json.Marshal(request)
 
-func TestWriteJSON(t *testing.T) {
-	w := httptest.NewRecorder()
-	data := map[string]interface{}{
-		"key": "value",
-		"num": 123,
-	}
-	WriteJSON(w, http.StatusOK, data)
+		// Send request
+		resp, err := http.Post(server.URL, "application/json", strings.NewReader(string(requestBytes)))
+		require.NoError(t, err)
+		defer resp.Body.Close()
 
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status code %d, got %d", http.StatusOK, w.Code)
-	}
+		// Check response
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var response struct {
-		Result map[string]interface{} `json:"result"`
-		Error  *types.Error           `json:"error"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
-		t.Fatalf("Failed to decode response: %v", err)
-	}
+		// Parse response
+		var response Response
+		err = json.NewDecoder(resp.Body).Decode(&response)
+		require.NoError(t, err)
 
-	if response.Error != nil {
-		t.Errorf("Expected no error, got %v", response.Error)
-	}
+		// Verify response
+		assert.Equal(t, request.ID, response.ID)
+		assert.NotNil(t, response.Result)
+		assert.Nil(t, response.Error)
 
-	if response.Result["key"] != "value" {
-		t.Errorf("Expected key value %q, got %q", "value", response.Result["key"])
-	}
-
-	if response.Result["num"].(float64) != 123 {
-		t.Errorf("Expected num value %d, got %v", 123, response.Result["num"])
-	}
+		// Parse result
+		var tools []types.Tool
+		err = json.Unmarshal(response.Result, &tools)
+		require.NoError(t, err)
+		assert.Len(t, tools, 1)
+		assert.Equal(t, "test-tool", tools[0].Name)
+	})
 }
 
 func TestServerLifecycle(t *testing.T) {
@@ -122,7 +196,7 @@ func TestServerLifecycle(t *testing.T) {
 		ReadTimeout:  1 * time.Second,
 		WriteTimeout: 1 * time.Second,
 		IdleTimeout:  5 * time.Second,
-		Logger:       logger.NewZapLogger(zap.NewNop(), &types.LoggerConfig{MinLevel: types.LogLevelInfo}),
+		Logger:       logger.NewNopLogger(),
 	}
 	server := New(opts)
 

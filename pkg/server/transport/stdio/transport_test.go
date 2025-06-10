@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 
 	"github.com/harriteja/mcp-go-sdk/pkg/server"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
@@ -29,7 +28,7 @@ func TestTransport_Initialize(t *testing.T) {
 	transport := New(srv, Options{
 		Reader: inputReader,
 		Writer: outputWriter,
-		Logger: zap.NewNop(),
+		Logger: types.NewNoOpLogger(),
 	})
 
 	// Start transport in goroutine
@@ -111,7 +110,7 @@ func TestTransport_ListTools(t *testing.T) {
 	transport := New(srv, Options{
 		Reader: inputReader,
 		Writer: outputWriter,
-		Logger: zap.NewNop(),
+		Logger: types.NewNoOpLogger(),
 	})
 
 	// Start transport in goroutine
@@ -176,7 +175,7 @@ func TestTransport_Error(t *testing.T) {
 	transport := New(srv, Options{
 		Reader: inputReader,
 		Writer: outputWriter,
-		Logger: zap.NewNop(),
+		Logger: types.NewNoOpLogger(),
 	})
 
 	// Start transport in goroutine

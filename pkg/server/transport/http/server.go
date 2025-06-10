@@ -84,23 +84,21 @@ func (s *Server) RegisterHandler(path string, handler http.Handler) error {
 
 // Start starts the HTTP server
 func (s *Server) Start(ctx context.Context) error {
-	s.logger.Info("Starting HTTP server", types.LogField{Key: "address", Value: s.server.Addr})
+	s.logger.Info(ctx, "http", "server", fmt.Sprintf("Starting HTTP server on %s", s.server.Addr))
 	return s.server.ListenAndServe()
 }
 
 // StartTLS starts the HTTPS server
 func (s *Server) StartTLS(certFile, keyFile string) error {
-	s.logger.Info("Starting HTTPS server",
-		types.LogField{Key: "address", Value: s.server.Addr},
-		types.LogField{Key: "cert_file", Value: certFile},
-		types.LogField{Key: "key_file", Value: keyFile},
-	)
+	ctx := context.Background()
+	s.logger.Info(ctx, "http", "server", fmt.Sprintf("Starting HTTPS server on %s (cert: %s, key: %s)",
+		s.server.Addr, certFile, keyFile))
 	return s.server.ListenAndServeTLS(certFile, keyFile)
 }
 
 // Stop gracefully shuts down the server
 func (s *Server) Stop(ctx context.Context) error {
-	s.logger.Info("Shutting down HTTP server")
+	s.logger.Info(ctx, "http", "server", "Shutting down HTTP server")
 	return s.server.Shutdown(ctx)
 }
 

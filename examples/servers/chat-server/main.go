@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,9 +12,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
 	"github.com/harriteja/mcp-go-sdk/pkg/server/middleware"
+	"github.com/harriteja/mcp-go-sdk/pkg/types"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap"
 )
 
 type ChatMessage struct {
@@ -23,7 +25,7 @@ type ChatMessage struct {
 }
 
 type ChatServer struct {
-	logger     *zap.Logger
+	logger     types.Logger
 	clients    map[*websocket.Conn]string
 	broadcast  chan ChatMessage
 	register   chan *websocket.Conn
@@ -31,7 +33,7 @@ type ChatServer struct {
 	upgrader   websocket.Upgrader
 }
 
-func NewChatServer(logger *zap.Logger) *ChatServer {
+func NewChatServer(logger types.Logger) *ChatServer {
 	return &ChatServer{
 		logger:     logger,
 		clients:    make(map[*websocket.Conn]string),
@@ -49,23 +51,24 @@ func NewChatServer(logger *zap.Logger) *ChatServer {
 }
 
 func (s *ChatServer) Start() {
+	ctx := context.Background()
 	for {
 		select {
 		case client := <-s.register:
 			s.clients[client] = ""
-			s.logger.Info("New client connected")
+			s.logger.Info(ctx, "chat", "server", "New client connected")
 
 		case client := <-s.unregister:
 			if _, ok := s.clients[client]; ok {
 				delete(s.clients, client)
-				s.logger.Info("Client disconnected")
+				s.logger.Info(ctx, "chat", "server", "Client disconnected")
 			}
 
 		case msg := <-s.broadcast:
 			for client := range s.clients {
 				err := client.WriteJSON(msg)
 				if err != nil {
-					s.logger.Error("Failed to send message", zap.Error(err))
+					s.logger.Error(ctx, "chat", "server", fmt.Sprintf("Failed to send message: %v", err))
 					client.Close()
 					delete(s.clients, client)
 				}
@@ -93,9 +96,10 @@ func (s *ChatServer) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *ChatServer) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		s.logger.Error("Failed to upgrade connection", zap.Error(err))
+		s.logger.Error(ctx, "chat", "server", fmt.Sprintf("Failed to upgrade connection: %v", err))
 		return
 	}
 
@@ -111,7 +115,7 @@ func (s *ChatServer) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		err := conn.ReadJSON(&msg)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				s.logger.Error("WebSocket error", zap.Error(err))
+				s.logger.Error(ctx, "chat", "server", fmt.Sprintf("WebSocket error: %v", err))
 			}
 			break
 		}
@@ -127,11 +131,10 @@ func main() {
 	flag.Parse()
 
 	// Initialize logger
-	logger, _ := zap.NewProduction()
-	defer logger.Sync()
+	stdLogger := logger.New("chat-server")
 
 	// Create chat server
-	chatServer := NewChatServer(logger)
+	chatServer := NewChatServer(stdLogger)
 	go chatServer.Start()
 
 	// Create metrics registry
@@ -161,9 +164,11 @@ func main() {
 
 	// Start server
 	go func() {
-		logger.Info("Starting server", zap.String("addr", *addr))
+		ctx := context.Background()
+		stdLogger.Info(ctx, "chat", "server", fmt.Sprintf("Starting server on %s", *addr))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("Failed to start server", zap.Error(err))
+			stdLogger.Error(ctx, "chat", "server", fmt.Sprintf("Failed to start server: %v", err))
+			os.Exit(1)
 		}
 	}()
 
@@ -177,6 +182,6 @@ func main() {
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("Failed to stop server gracefully", zap.Error(err))
+		stdLogger.Error(ctx, "chat", "server", fmt.Sprintf("Failed to stop server gracefully: %v", err))
 	}
 }

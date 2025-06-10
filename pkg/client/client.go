@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 
@@ -76,6 +77,47 @@ func (c *Client) Initialize(ctx context.Context) error {
 
 	c.serverInfo = &resp.ServerInfo
 	c.capabilities = &resp.Capabilities
+	return nil
+}
+
+// Initialized notifies the server that the client has completed initialization
+func (c *Client) Initialized(ctx context.Context) error {
+	// The initialized notification has an empty payload
+	notification := types.InitializedNotification{}
+
+	// This is a notification, not a request, so we don't expect a response
+	if err := c.call(ctx, "initialized", notification, nil); err != nil {
+		return errors.Wrap(err, "failed to send initialized notification")
+	}
+
+	return nil
+}
+
+// Ping sends a ping request to test server connectivity
+func (c *Client) Ping(ctx context.Context) (*types.PingResponse, error) {
+	req := types.PingRequest{
+		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
+	}
+
+	var resp types.PingResponse
+	if err := c.call(ctx, "ping", req, &resp); err != nil {
+		return nil, errors.Wrap(err, "failed to ping server")
+	}
+
+	return &resp, nil
+}
+
+// Cancel sends a request to cancel an ongoing operation
+func (c *Client) Cancel(ctx context.Context, requestID string) error {
+	req := types.CancelRequest{
+		ID: requestID,
+	}
+
+	// This is a notification, not a request, so we don't expect a response
+	if err := c.call(ctx, "cancel", req, nil); err != nil {
+		return errors.Wrap(err, "failed to send cancellation request")
+	}
+
 	return nil
 }
 
@@ -250,14 +292,14 @@ func (c *Client) callStdio(method string, params interface{}, result interface{}
 		return errors.Wrap(err, "failed to decode response")
 	}
 
-	// If result is nil, we don't need to decode further
+	// If no result expected, return
 	if result == nil {
 		return nil
 	}
 
-	// Decode result into target type
+	// Decode result
 	if err := json.Unmarshal(resultResp.Result, result); err != nil {
-		return errors.Wrap(err, "failed to decode response")
+		return errors.Wrap(err, "failed to decode result")
 	}
 
 	return nil

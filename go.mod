@@ -1,6 +1,6 @@
 module github.com/harriteja/mcp-go-sdk
 
-go 1.22
+go 1.23.7
 
 require (
 	github.com/fsnotify/fsnotify v1.7.0
@@ -15,7 +15,7 @@ require (
 	github.com/stretchr/testify v1.9.0
 	github.com/xeipuuv/gojsonschema v1.2.0
 	go.uber.org/ratelimit v0.3.1
-	go.uber.org/zap v1.26.0
+	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.31.0
 	golang.org/x/oauth2 v0.16.0
 	golang.org/x/time v0.5.0

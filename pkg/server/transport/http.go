@@ -1,12 +1,12 @@
 package transport
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/pkg/errors"
-	"go.uber.org/zap"
 
 	"github.com/harriteja/mcp-go-sdk/pkg/server"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
@@ -27,13 +27,13 @@ func (f HTTPHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // HTTPTransport provides HTTP transport for MCP server
 type HTTPTransport struct {
 	server *server.Server
-	logger *zap.Logger
+	logger types.Logger
 }
 
 // NewHTTPTransport creates a new HTTP transport
-func NewHTTPTransport(srv *server.Server, logger *zap.Logger) *HTTPTransport {
+func NewHTTPTransport(srv *server.Server, logger types.Logger) *HTTPTransport {
 	if logger == nil {
-		logger, _ = zap.NewDevelopment()
+		logger = types.NewNoOpLogger()
 	}
 
 	return &HTTPTransport{
@@ -78,6 +78,32 @@ func (t *HTTPTransport) handlePost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		result, err = t.server.Initialize(r.Context(), &params)
+
+	case "initialized":
+		var notification types.InitializedNotification
+		if err := json.Unmarshal(req.Params, &notification); err != nil {
+			t.writeError(w, errors.Wrap(err, "failed to unmarshal initialized params"))
+			return
+		}
+		err = t.server.Initialized(r.Context(), &notification)
+		// No result expected for notifications
+
+	case "ping":
+		var params types.PingRequest
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			t.writeError(w, errors.Wrap(err, "failed to unmarshal ping params"))
+			return
+		}
+		result, err = t.server.Ping(r.Context(), &params)
+
+	case "cancel":
+		var params types.CancelRequest
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			t.writeError(w, errors.Wrap(err, "failed to unmarshal cancel params"))
+			return
+		}
+		err = t.server.Cancel(r.Context(), &params)
+		// No result expected for notifications
 
 	case "listTools":
 		result, err = t.server.ListTools(r.Context())
@@ -125,7 +151,7 @@ func (t *HTTPTransport) handlePost(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", mimeType)
 		if _, err := w.Write(data); err != nil {
-			t.logger.Error("Failed to write data", zap.Error(err))
+			t.logger.Error(r.Context(), "http", "writeData", "Failed to write data: "+err.Error())
 		}
 		return
 
@@ -149,20 +175,20 @@ func (t *HTTPTransport) handleGet(w http.ResponseWriter, r *http.Request) {
 	// Health check endpoint
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("OK")); err != nil {
-		t.logger.Error("Failed to write data", zap.Error(err))
+		t.logger.Error(r.Context(), "http", "writeData", "Failed to write data: "+err.Error())
 	}
 }
 
 func (t *HTTPTransport) writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		t.logger.Error("Failed to encode response", zap.Error(err))
+		t.logger.Error(context.Background(), "http", "writeJSON", "Failed to encode response: "+err.Error())
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
 
 func (t *HTTPTransport) writeError(w http.ResponseWriter, err error) {
-	t.logger.Error("Request error", zap.Error(err))
+	t.logger.Error(context.Background(), "http", "writeError", "Request error: "+err.Error())
 
 	mcpErr, ok := err.(*types.Error)
 	if !ok {
@@ -175,6 +201,6 @@ func (t *HTTPTransport) writeError(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(mcpErr.Code)
 	if err := json.NewEncoder(w).Encode(mcpErr); err != nil {
-		t.logger.Error("Failed to encode error response", zap.Error(err))
+		t.logger.Error(context.Background(), "http", "writeError", "Failed to encode error response: "+err.Error())
 	}
 }

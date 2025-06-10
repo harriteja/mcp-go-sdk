@@ -8,163 +8,133 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
-	"go.uber.org/zap"
 )
 
-func TestClient(t *testing.T) {
-	// Create test server
+func TestClientSuccess(t *testing.T) {
+	// Create a test server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/test":
-			// Echo request headers and body
-			w.Header().Set("Content-Type", "application/json")
-			result := map[string]interface{}{
-				"method":  r.Method,
-				"headers": r.Header,
-			}
+		var req Request
+		err := json.NewDecoder(r.Body).Decode(&req)
+		if err != nil {
+			t.Fatalf("Failed to decode request: %v", err)
+		}
 
-			if r.Method == http.MethodPost || r.Method == http.MethodPut {
-				var body map[string]interface{}
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					WriteError(w, http.StatusBadRequest, err.Error())
-					return
-				}
-				result["body"] = body
-			}
+		// Validate request
+		assert.Equal(t, "testMethod", req.Method)
 
-			WriteJSON(w, http.StatusOK, result)
-
-		case "/error":
-			WriteError(w, http.StatusBadRequest, "test error")
-
-		default:
-			http.NotFound(w, r)
+		// Send response
+		resp := Response{
+			ID:     req.ID,
+			Result: json.RawMessage(`{"message":"success"}`),
+		}
+		err = json.NewEncoder(w).Encode(resp)
+		if err != nil {
+			t.Fatalf("Failed to encode response: %v", err)
 		}
 	}))
 	defer server.Close()
 
 	// Create client
 	client := NewClient(ClientOptions{
-		BaseURL: server.URL,
-		Timeout: 5 * time.Second,
-		Logger:  zap.NewNop(),
+		ServerURL:     server.URL,
+		Timeout:       time.Second,
+		MaxRetries:    3,
+		RetryInterval: time.Millisecond,
+		Logger:        logger.NewNopLogger(),
 	})
 
-	// Test GET request
-	t.Run("GET request", func(t *testing.T) {
-		headers := map[string]string{
-			"X-Test": "test-value",
-		}
-		resp, err := client.Get(context.Background(), "/test", headers)
+	// Make request
+	var result map[string]string
+	err := client.Call(context.Background(), "testMethod", map[string]string{"key": "value"}, &result)
+	require.NoError(t, err)
+	assert.Equal(t, "success", result["message"])
+}
+
+func TestClientError(t *testing.T) {
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req Request
+		err := json.NewDecoder(r.Body).Decode(&req)
 		if err != nil {
-			t.Fatalf("Failed to send GET request: %v", err)
+			t.Fatalf("Failed to decode request: %v", err)
 		}
 
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("Expected status code %d, got %d", http.StatusOK, resp.StatusCode)
+		// Send error response
+		resp := Response{
+			ID: req.ID,
+			Error: &types.Error{
+				Code:    400,
+				Message: "Bad request",
+			},
 		}
-
-		var response struct {
-			Result struct {
-				Method  string                   `json:"method"`
-				Headers map[string][]interface{} `json:"headers"`
-			} `json:"result"`
-		}
-		if err := json.Unmarshal(resp.Body, &response); err != nil {
-			t.Fatalf("Failed to decode response: %v", err)
-		}
-
-		if response.Result.Method != "GET" {
-			t.Errorf("Expected method GET, got %v", response.Result.Method)
-		}
-
-		xTest := response.Result.Headers["X-Test"]
-		if len(xTest) == 0 || xTest[0] != "test-value" {
-			t.Errorf("Expected header X-Test=test-value, got %v", xTest)
-		}
-	})
-
-	// Test POST request
-	t.Run("POST request", func(t *testing.T) {
-		body := map[string]interface{}{
-			"key": "value",
-		}
-		resp, err := client.Post(context.Background(), "/test", body, nil)
+		err = json.NewEncoder(w).Encode(resp)
 		if err != nil {
-			t.Fatalf("Failed to send POST request: %v", err)
+			t.Fatalf("Failed to encode response: %v", err)
 		}
+	}))
+	defer server.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("Expected status code %d, got %d", http.StatusOK, resp.StatusCode)
-		}
-
-		var response struct {
-			Result struct {
-				Method string                 `json:"method"`
-				Body   map[string]interface{} `json:"body"`
-			} `json:"result"`
-		}
-		if err := json.Unmarshal(resp.Body, &response); err != nil {
-			t.Fatalf("Failed to decode response: %v", err)
-		}
-
-		if response.Result.Method != "POST" {
-			t.Errorf("Expected method POST, got %v", response.Result.Method)
-		}
-
-		if response.Result.Body["key"] != "value" {
-			t.Errorf("Expected body key=value, got %v", response.Result.Body["key"])
-		}
+	// Create client
+	client := NewClient(ClientOptions{
+		ServerURL:     server.URL,
+		Timeout:       time.Second,
+		MaxRetries:    3,
+		RetryInterval: time.Millisecond,
+		Logger:        logger.NewNopLogger(),
 	})
 
-	// Test error response
-	t.Run("Error response", func(t *testing.T) {
-		resp, err := client.Get(context.Background(), "/error", nil)
+	// Make request
+	var result map[string]string
+	err := client.Call(context.Background(), "testMethod", map[string]string{"key": "value"}, &result)
+	require.Error(t, err)
+
+	// Verify error type
+	mcpErr, ok := types.IsError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, mcpErr.Code)
+	assert.Equal(t, "Bad request", mcpErr.Message)
+}
+
+func TestClientRetry(t *testing.T) {
+	attempts := 0
+
+	// Create a test server that fails the first two attempts
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts <= 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		// Succeed on third attempt
+		resp := Response{
+			Result: json.RawMessage(`{"message":"success"}`),
+		}
+		err := json.NewEncoder(w).Encode(resp)
 		if err != nil {
-			t.Fatalf("Failed to send request: %v", err)
+			t.Fatalf("Failed to encode response: %v", err)
 		}
+	}))
+	defer server.Close()
 
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("Expected status code %d, got %d", http.StatusBadRequest, resp.StatusCode)
-		}
-
-		var response struct {
-			Error *types.Error `json:"error"`
-		}
-		if err := json.Unmarshal(resp.Body, &response); err != nil {
-			t.Fatalf("Failed to decode response: %v", err)
-		}
-
-		if response.Error.Message != "test error" {
-			t.Errorf("Expected error message 'test error', got %q", response.Error.Message)
-		}
+	// Create client with retry
+	client := NewClient(ClientOptions{
+		ServerURL:     server.URL,
+		Timeout:       time.Second,
+		MaxRetries:    3,
+		RetryInterval: time.Millisecond,
+		Logger:        logger.NewNopLogger(),
 	})
 
-	// Test request timeout
-	t.Run("Request timeout", func(t *testing.T) {
-		timeoutClient := NewClient(ClientOptions{
-			BaseURL: "http://example.com",
-			Timeout: 1 * time.Millisecond,
-			Logger:  zap.NewNop(),
-		})
-
-		_, err := timeoutClient.Get(context.Background(), "/test", nil)
-		if err == nil {
-			t.Error("Expected timeout error, got nil")
-		}
-	})
-
-	// Test invalid URL
-	t.Run("Invalid URL", func(t *testing.T) {
-		invalidClient := NewClient(ClientOptions{
-			BaseURL: "://invalid",
-			Logger:  zap.NewNop(),
-		})
-
-		_, err := invalidClient.Get(context.Background(), "/test", nil)
-		if err == nil {
-			t.Error("Expected error for invalid URL, got nil")
-		}
-	})
+	// Make request
+	var result map[string]string
+	err := client.Call(context.Background(), "testMethod", map[string]string{"key": "value"}, &result)
+	require.NoError(t, err)
+	assert.Equal(t, "success", result["message"])
+	assert.Equal(t, 3, attempts)
 }

@@ -1,19 +1,20 @@
 package middleware
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"runtime/debug"
 
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
-	"go.uber.org/zap"
 )
 
 // RecoveryConfig holds configuration for the recovery middleware
 type RecoveryConfig struct {
-	// Logger is the zap logger instance to use
-	Logger *zap.Logger
+	// Logger is the logger instance to use
+	Logger types.Logger
 	// OnPanic is called when a panic occurs, after logging but before writing the response
 	OnPanic func(http.ResponseWriter, *http.Request, interface{})
 	// StackTrace determines whether to include stack traces in logs
@@ -37,24 +38,29 @@ func RecoveryMiddleware(config RecoveryConfig) func(http.Handler) http.Handler {
 						stack = debug.Stack()
 					}
 
-					// Log the panic
-					logger := config.Logger
-					if logger == nil {
-						logger, _ = zap.NewProduction()
+					// Get logger
+					loggerInstance := config.Logger
+					if loggerInstance == nil {
+						loggerInstance = logger.GetDefaultLogger()
 					}
 
-					fields := []zap.Field{
-						zap.String("error", fmt.Sprint(err)),
-						zap.String("method", r.Method),
-						zap.String("path", r.URL.Path),
-						zap.String("remote_addr", r.RemoteAddr),
-					}
+					// Create error message
+					method := r.Method
+					path := r.URL.Path
+					remoteAddr := r.RemoteAddr
+					errStr := fmt.Sprint(err)
+
+					message := fmt.Sprintf("Panic recovered - %s - Method: %s, Path: %s, Remote: %s",
+						errStr, method, path, remoteAddr)
+
+					// Log the panic
+					ctx := context.Background()
+					loggerInstance.Error(ctx, "http", "recovery", message)
 
 					if stack != nil {
-						fields = append(fields, zap.ByteString("stack", stack))
+						stackMessage := "Stack trace: " + string(stack)
+						loggerInstance.Error(ctx, "http", "recovery", stackMessage)
 					}
-
-					logger.Error("Panic recovered", fields...)
 
 					// Call custom panic handler if provided
 					if config.OnPanic != nil {
@@ -72,9 +78,8 @@ func RecoveryMiddleware(config RecoveryConfig) func(http.Handler) http.Handler {
 					}
 					data, _ := json.Marshal(response)
 					if _, err := w.Write(data); err != nil {
-						logger.Error("Failed to write error response",
-							zap.Error(err),
-						)
+						loggerInstance.Error(ctx, "http", "recovery",
+							fmt.Sprintf("Failed to write error response: %v", err))
 					}
 				}
 			}()

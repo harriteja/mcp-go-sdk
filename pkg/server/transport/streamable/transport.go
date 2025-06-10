@@ -1,6 +1,7 @@
 package streamable
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,7 +9,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
+	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
 // EventStore interface for storing and retrieving events
@@ -30,7 +32,7 @@ type Transport struct {
 	sessionID           string
 	eventStore          EventStore
 	jsonResponseEnabled bool
-	logger              *zap.Logger
+	logger              types.Logger
 	upgrader            websocket.Upgrader
 	clients             sync.Map
 }
@@ -40,13 +42,13 @@ type Options struct {
 	SessionID           string
 	EventStore          EventStore
 	JSONResponseEnabled bool
-	Logger              *zap.Logger
+	Logger              types.Logger
 }
 
 // New creates a new streamable HTTP transport
 func New(opts Options) *Transport {
 	if opts.Logger == nil {
-		opts.Logger, _ = zap.NewProduction()
+		opts.Logger = logger.GetDefaultLogger()
 	}
 
 	return &Transport{
@@ -79,6 +81,7 @@ func (t *Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (t *Transport) handleGet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	// Set SSE headers
 	w.Header().Set("Content-Type", contentTypeSSE)
 	w.Header().Set("Cache-Control", "no-cache")
@@ -89,7 +92,7 @@ func (t *Transport) handleGet(w http.ResponseWriter, r *http.Request) {
 	lastEventID := r.Header.Get(headerLastEvent)
 	if lastEventID != "" && t.eventStore != nil {
 		if err := t.replayEvents(w, lastEventID); err != nil {
-			t.logger.Error("Failed to replay events", zap.Error(err))
+			t.logger.Error(ctx, "streamable", "transport", fmt.Sprintf("Failed to replay events: %v", err))
 			http.Error(w, "Failed to replay events", http.StatusInternalServerError)
 			return
 		}
@@ -115,6 +118,7 @@ func (t *Transport) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (t *Transport) handlePost(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	// Validate session
 	if !t.validateSession(r) {
 		http.Error(w, "Invalid session", http.StatusUnauthorized)
@@ -139,7 +143,7 @@ func (t *Transport) handlePost(w http.ResponseWriter, r *http.Request) {
 	// Store event if event store is configured
 	if t.eventStore != nil {
 		if err := t.eventStore.StoreEvent(event); err != nil {
-			t.logger.Error("Failed to store event", zap.Error(err))
+			t.logger.Error(ctx, "streamable", "transport", fmt.Sprintf("Failed to store event: %v", err))
 			http.Error(w, "Failed to store event", http.StatusInternalServerError)
 			return
 		}
@@ -155,7 +159,7 @@ func (t *Transport) handlePost(w http.ResponseWriter, r *http.Request) {
 			"status": "ok",
 			"id":     event.ID,
 		}); err != nil {
-			t.logger.Error("Failed to encode JSON response", zap.Error(err))
+			t.logger.Error(ctx, "streamable", "transport", fmt.Sprintf("Failed to encode JSON response: %v", err))
 		}
 	} else {
 		w.WriteHeader(http.StatusAccepted)
@@ -203,6 +207,12 @@ func (t *Transport) replayEvents(w http.ResponseWriter, since string) error {
 			return err
 		}
 	}
+
+	// Flush the response
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
 	return nil
 }
 
@@ -211,9 +221,11 @@ func (t *Transport) broadcast(event *Event) {
 		if client, ok := value.(*Client); ok {
 			select {
 			case client.Send <- event:
+				// Event sent successfully
 			default:
-				t.logger.Warn("Client send buffer full, dropping event",
-					zap.String("client_id", client.ID))
+				// Client buffer full, disconnect
+				close(client.Done)
+				t.clients.Delete(key)
 			}
 		}
 		return true
@@ -221,15 +233,19 @@ func (t *Transport) broadcast(event *Event) {
 }
 
 func (t *Transport) writeEvents(w http.ResponseWriter, client *Client) {
+	ctx := client.Context()
+	defer close(client.Done)
+
 	for {
 		select {
 		case event := <-client.Send:
 			if err := t.writeEvent(w, event); err != nil {
-				t.logger.Error("Failed to write event",
-					zap.Error(err),
-					zap.String("client_id", client.ID))
-				close(client.Done)
+				t.logger.Error(ctx, "streamable", "transport", fmt.Sprintf("Error writing event: %v", err))
 				return
+			}
+			// Flush the response
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
 			}
 		case <-client.Done:
 			return
@@ -238,13 +254,21 @@ func (t *Transport) writeEvents(w http.ResponseWriter, client *Client) {
 }
 
 func (t *Transport) writeEvent(w http.ResponseWriter, event *Event) error {
-	fmt.Fprintf(w, "id: %s\n", event.ID)
-	fmt.Fprintf(w, "event: %s\n", event.Type)
-	fmt.Fprintf(w, "data: %s\n\n", string(event.Data))
-
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
+	// Write event ID
+	if _, err := fmt.Fprintf(w, "id: %s\n", event.ID); err != nil {
+		return err
 	}
+
+	// Write event type
+	if _, err := fmt.Fprintf(w, "event: %s\n", event.Type); err != nil {
+		return err
+	}
+
+	// Write event data
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", event.Data); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -255,12 +279,14 @@ type Client struct {
 	Done chan struct{}
 }
 
-const (
-	// Headers
-	headerSessionID = "mcp-session-id"
-	headerLastEvent = "last-event-id"
+// Context returns a new context for the client
+func (c *Client) Context() context.Context {
+	return context.Background()
+}
 
-	// Content types
-	contentTypeJSON = "application/json"
+const (
 	contentTypeSSE  = "text/event-stream"
+	contentTypeJSON = "application/json"
+	headerLastEvent = "Last-Event-ID"
+	headerSessionID = "X-Session-ID"
 )

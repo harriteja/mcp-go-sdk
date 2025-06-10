@@ -93,13 +93,13 @@ func (s *Server) RegisterHandler(msgType string, handler Handler) {
 
 // Start implements Transport.Start
 func (s *Server) Start(ctx context.Context) error {
-	s.logger.Info("Starting WebSocket transport server")
+	s.logger.Info(ctx, "websocket", "start", "Starting WebSocket transport server")
 	return nil
 }
 
 // Stop implements Transport.Stop
 func (s *Server) Stop(ctx context.Context) error {
-	s.logger.Info("Stopping WebSocket transport server")
+	s.logger.Info(ctx, "websocket", "stop", "Stopping WebSocket transport server")
 
 	// Cancel the server context
 	s.cancel()
@@ -111,9 +111,7 @@ func (s *Server) Stop(ctx context.Context) error {
 		if err := conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Server shutting down"),
 			time.Now().Add(time.Second)); err != nil {
-			s.logger.Error("Failed to send close message",
-				types.LogField{Key: "error", Value: err.Error()},
-			)
+			s.logger.Error(ctx, "websocket", "stop", "Failed to send close message: "+err.Error())
 		}
 		conn.Close()
 		delete(s.conns, conn)
@@ -134,10 +132,7 @@ func (s *Server) HandleConnection(w http.ResponseWriter, r *http.Request) {
 	// Upgrade HTTP connection to WebSocket
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		s.logger.Error("Failed to upgrade connection",
-			types.LogField{Key: "error", Value: err.Error()},
-			types.LogField{Key: "remote_addr", Value: r.RemoteAddr},
-		)
+		s.logger.Error(r.Context(), "websocket", "upgrade", "Failed to upgrade connection: "+err.Error()+" from "+r.RemoteAddr)
 		return
 	}
 
@@ -154,9 +149,7 @@ func (s *Server) HandleConnection(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 	}()
 
-	s.logger.Info("New WebSocket connection",
-		types.LogField{Key: "remote_addr", Value: r.RemoteAddr},
-	)
+	s.logger.Info(r.Context(), "websocket", "connection", "New WebSocket connection from "+r.RemoteAddr)
 
 	// Create context for the connection
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -172,10 +165,7 @@ func (s *Server) HandleConnection(w http.ResponseWriter, r *http.Request) {
 			var msg Message
 			if err := conn.ReadJSON(&msg); err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-					s.logger.Error("WebSocket read error",
-						types.LogField{Key: "error", Value: err.Error()},
-						types.LogField{Key: "remote_addr", Value: r.RemoteAddr},
-					)
+					s.logger.Error(ctx, "websocket", "read", "WebSocket read error: "+err.Error()+" from "+r.RemoteAddr)
 				}
 				return
 			}
@@ -186,37 +176,24 @@ func (s *Server) HandleConnection(w http.ResponseWriter, r *http.Request) {
 			s.mu.RUnlock()
 
 			if !ok {
-				s.logger.Warn("Unknown message type",
-					types.LogField{Key: "type", Value: msg.Type},
-					types.LogField{Key: "remote_addr", Value: r.RemoteAddr},
-				)
+				s.logger.Warn(ctx, "websocket", "handler", "Unknown message type: "+msg.Type+" from "+r.RemoteAddr)
 				if err := conn.WriteJSON(Message{
 					Type:    "error",
 					Payload: json.RawMessage(fmt.Sprintf(`{"message":"unknown message type: %s"}`, msg.Type)),
 				}); err != nil {
-					s.logger.Error("Failed to write error message",
-						types.LogField{Key: "error", Value: err.Error()},
-						types.LogField{Key: "remote_addr", Value: r.RemoteAddr},
-					)
+					s.logger.Error(ctx, "websocket", "write", "Failed to write error message: "+err.Error()+" to "+r.RemoteAddr)
 				}
 				continue
 			}
 
 			// Handle message
 			if err := handler.HandleMessage(ctx, conn, msg); err != nil {
-				s.logger.Error("Failed to handle message",
-					types.LogField{Key: "error", Value: err.Error()},
-					types.LogField{Key: "type", Value: msg.Type},
-					types.LogField{Key: "remote_addr", Value: r.RemoteAddr},
-				)
+				s.logger.Error(ctx, "websocket", "handle", "Failed to handle message: "+err.Error()+" of type "+msg.Type+" from "+r.RemoteAddr)
 				if err := conn.WriteJSON(Message{
 					Type:    "error",
 					Payload: json.RawMessage(fmt.Sprintf(`{"message":%q}`, err.Error())),
 				}); err != nil {
-					s.logger.Error("Failed to write error message",
-						types.LogField{Key: "error", Value: err.Error()},
-						types.LogField{Key: "remote_addr", Value: r.RemoteAddr},
-					)
+					s.logger.Error(ctx, "websocket", "write", "Failed to write error message: "+err.Error()+" to "+r.RemoteAddr)
 				}
 			}
 		}
@@ -237,9 +214,7 @@ func (s *Server) WriteError(w http.ResponseWriter, code int, message string) {
 	}{
 		Error: types.NewError(code, message),
 	}); err != nil {
-		s.logger.Error("Failed to encode error response",
-			types.LogField{Key: "error", Value: err.Error()},
-		)
+		s.logger.Error(context.Background(), "websocket", "writeError", "Failed to encode error response: "+err.Error())
 	}
 }
 
@@ -252,8 +227,6 @@ func (s *Server) WriteJSON(w http.ResponseWriter, code int, data interface{}) {
 	}{
 		Result: data,
 	}); err != nil {
-		s.logger.Error("Failed to encode JSON response",
-			types.LogField{Key: "error", Value: err.Error()},
-		)
+		s.logger.Error(context.Background(), "websocket", "writeJSON", "Failed to encode JSON response: "+err.Error())
 	}
 }

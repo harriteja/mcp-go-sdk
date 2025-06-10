@@ -2,12 +2,13 @@ package resource
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/pkg/errors"
-	"go.uber.org/zap"
 
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
@@ -48,7 +49,7 @@ type Manager struct {
 	// Cache storage
 	cache map[string]*CacheEntry
 
-	logger *zap.Logger
+	logger types.Logger
 }
 
 // Options represents resource manager options
@@ -58,13 +59,13 @@ type Options struct {
 	CacheEnabled    bool
 	CacheTTL        time.Duration
 	MaxCacheSize    int64
-	Logger          *zap.Logger
+	Logger          types.Logger
 }
 
 // New creates a new resource manager
 func New(opts Options) *Manager {
 	if opts.Logger == nil {
-		opts.Logger, _ = zap.NewDevelopment()
+		opts.Logger = logger.GetDefaultLogger()
 	}
 	if opts.CacheTTL == 0 {
 		opts.CacheTTL = 5 * time.Minute
@@ -174,6 +175,7 @@ func (m *Manager) evictLRU(requiredSize int64) {
 		}
 	}
 
+	ctx := context.Background()
 	// Remove entries until we have enough space
 	for _, item := range entries {
 		if m.currentSize+requiredSize <= m.maxCacheSize {
@@ -181,8 +183,7 @@ func (m *Manager) evictLRU(requiredSize int64) {
 		}
 		delete(m.cache, item.uri)
 		m.currentSize -= int64(len(item.entry.Data))
-		m.logger.Debug("Evicted resource from cache",
-			zap.String("uri", item.uri),
-			zap.Time("lastAccess", item.entry.LastAccess))
+		m.logger.Info(ctx, "resource", "cache", fmt.Sprintf("Evicted resource from cache - URI: %s, Last Access: %s",
+			item.uri, item.entry.LastAccess))
 	}
 }

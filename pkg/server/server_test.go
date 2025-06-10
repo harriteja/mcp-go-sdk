@@ -5,13 +5,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
 func TestServer_Initialize(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := types.NewNoOpLogger()
 	srv := New(Options{
 		Name:         "test-server",
 		Version:      "1.0.0",
@@ -37,7 +36,7 @@ func TestServer_Initialize(t *testing.T) {
 }
 
 func TestServer_ListTools(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := types.NewNoOpLogger()
 	srv := New(Options{
 		Name:    "test-server",
 		Version: "1.0.0",
@@ -67,7 +66,7 @@ func TestServer_ListTools(t *testing.T) {
 }
 
 func TestServer_CallTool(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := types.NewNoOpLogger()
 	srv := New(Options{
 		Name:    "test-server",
 		Version: "1.0.0",
@@ -95,7 +94,7 @@ func TestServer_CallTool(t *testing.T) {
 }
 
 func TestServer_GetSession(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := types.NewNoOpLogger()
 	srv := New(Options{
 		Name:    "test-server",
 		Version: "1.0.0",

@@ -11,8 +11,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
@@ -65,7 +65,7 @@ func setupWebSocketServer(t *testing.T, handler func(*websocket.Conn)) (*websock
 
 func TestWebSocketStreaming(t *testing.T) {
 	t.Parallel()
-	logger, _ := zap.NewDevelopment()
+	logger := types.NewNoOpLogger()
 
 	t.Run("Write and read progress", func(t *testing.T) {
 		t.Parallel()
@@ -361,7 +361,7 @@ func TestStreamHandler(t *testing.T) {
 	defer conn.Close()
 
 	// Create stream handler
-	handler := NewStreamHandler(conn, zap.NewNop())
+	handler := NewStreamHandler(conn, logger.NewNopLogger())
 
 	// Test Write
 	data := []byte("test data")
@@ -433,7 +433,7 @@ func TestStreamPipe(t *testing.T) {
 	defer conn.Close()
 
 	// Create stream pipe
-	pipe := NewStreamPipe(conn, zap.NewNop())
+	pipe := NewStreamPipe(conn, logger.NewNopLogger())
 	defer pipe.Close()
 
 	// Test Write

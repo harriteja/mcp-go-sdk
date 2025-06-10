@@ -2,258 +2,212 @@ package websocket
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
+	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
-
-// Client represents a WebSocket client
-type Client struct {
-	conn     *websocket.Conn
-	handlers map[string]Handler
-	logger   *zap.Logger
-	mu       sync.RWMutex
-	done     chan struct{}
-	url      string
-	headers  http.Header
-	dialer   websocket.Dialer
-}
 
 // ClientOptions represents client configuration options
 type ClientOptions struct {
-	// URL of the WebSocket server
+	// URL for the WebSocket server
 	URL string
 	// Headers to include in the connection request
 	Headers http.Header
-	// HandshakeTimeout for the connection
-	HandshakeTimeout time.Duration
+	// Timeout for connection attempts
+	ConnectTimeout time.Duration
 	// Logger instance
-	Logger *zap.Logger
+	Logger types.Logger
+	// ReadBufferSize is the size of the buffer for reading messages
+	ReadBufferSize int
+	// WriteBufferSize is the size of the buffer for writing messages
+	WriteBufferSize int
+	// EnableCompression enables per-message compression
+	EnableCompression bool
+}
+
+// Client represents a WebSocket client
+type Client struct {
+	url               *url.URL
+	headers           http.Header
+	conn              *websocket.Conn
+	logger            types.Logger
+	connectTimeout    time.Duration
+	mutex             sync.Mutex
+	readBufferSize    int
+	writeBufferSize   int
+	enableCompression bool
 }
 
 // NewClient creates a new WebSocket client
 func NewClient(opts ClientOptions) (*Client, error) {
 	if opts.Logger == nil {
-		opts.Logger, _ = zap.NewProduction()
+		opts.Logger = logger.GetDefaultLogger()
 	}
-	if opts.HandshakeTimeout == 0 {
-		opts.HandshakeTimeout = 10 * time.Second
+	if opts.ConnectTimeout == 0 {
+		opts.ConnectTimeout = 10 * time.Second
 	}
-
-	client := &Client{
-		handlers: make(map[string]Handler),
-		logger:   opts.Logger,
-		done:     make(chan struct{}),
-		url:      opts.URL,
-		headers:  opts.Headers,
-		dialer: websocket.Dialer{
-			HandshakeTimeout: opts.HandshakeTimeout,
-		},
+	if opts.ReadBufferSize == 0 {
+		opts.ReadBufferSize = 1024
+	}
+	if opts.WriteBufferSize == 0 {
+		opts.WriteBufferSize = 1024
 	}
 
-	// Connect to server
-	if err := client.Connect(); err != nil {
-		return nil, err
-	}
-
-	return client, nil
-}
-
-// Connect establishes a connection to the WebSocket server
-func (c *Client) Connect() error {
-	c.mu.Lock()
-	// Close existing connection if any
-	if c.conn != nil {
-		c.conn.Close()
-	}
-
-	// Create fresh done channel
-	c.done = make(chan struct{})
-	c.mu.Unlock()
-
-	// Connect to server - do this outside the lock to avoid deadlock
-	conn, _, err := c.dialer.Dial(c.url, c.headers)
+	u, err := url.Parse(opts.URL)
 	if err != nil {
-		return fmt.Errorf("failed to connect to WebSocket server: %w", err)
+		return nil, fmt.Errorf("invalid URL: %w", err)
 	}
 
-	// Now that we have a connection, lock again to update the state
-	c.mu.Lock()
+	return &Client{
+		url:               u,
+		headers:           opts.Headers,
+		logger:            opts.Logger,
+		connectTimeout:    opts.ConnectTimeout,
+		readBufferSize:    opts.ReadBufferSize,
+		writeBufferSize:   opts.WriteBufferSize,
+		enableCompression: opts.EnableCompression,
+	}, nil
+}
+
+// Connect establishes a WebSocket connection
+func (c *Client) Connect(ctx context.Context) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if c.conn != nil {
+		return nil
+	}
+
+	c.logger.Info(ctx, "websocket", "client", fmt.Sprintf("Connecting to %s", c.url.String()))
+
+	dialer := &websocket.Dialer{
+		Proxy:             http.ProxyFromEnvironment,
+		HandshakeTimeout:  c.connectTimeout,
+		ReadBufferSize:    c.readBufferSize,
+		WriteBufferSize:   c.writeBufferSize,
+		EnableCompression: c.enableCompression,
+	}
+
+	conn, resp, err := dialer.DialContext(ctx, c.url.String(), c.headers)
+	if err != nil {
+		if resp != nil {
+			c.logger.Error(ctx, "websocket", "client", fmt.Sprintf("Failed to connect: %v, status: %d", err, resp.StatusCode))
+		} else {
+			c.logger.Error(ctx, "websocket", "client", fmt.Sprintf("Failed to connect: %v", err))
+		}
+		return err
+	}
+
 	c.conn = conn
-	doneCh := c.done // Capture the done channel while holding the lock
-	c.mu.Unlock()
-
-	// Start message handler with the captured done channel
-	go c.handleMessages(doneCh, conn)
-
-	return nil
-}
-
-// IsConnected returns true if the client is connected to the server
-func (c *Client) IsConnected() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.conn != nil
-}
-
-// SendMessage sends a message of a specific type with payload and waits for a response
-func (c *Client) SendMessage(ctx context.Context, msgType string, payload json.RawMessage) (*Message, error) {
-	msg := Message{
-		Type:    msgType,
-		Payload: payload,
-	}
-	return c.SendAndWait(ctx, msg, "response")
-}
-
-// RegisterHandler registers a handler for a message type
-func (c *Client) RegisterHandler(msgType string, handler Handler) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.handlers[msgType] = handler
-}
-
-// Send sends a message to the server
-func (c *Client) Send(msg Message) error {
-	c.mu.RLock()
-	conn := c.conn
-	c.mu.RUnlock()
-
-	if conn == nil {
-		return fmt.Errorf("not connected")
-	}
-
-	if err := conn.WriteJSON(msg); err != nil {
-		return fmt.Errorf("failed to send message: %w", err)
-	}
-
-	c.logger.Debug("Sent message",
-		zap.String("type", msg.Type),
-		zap.String("payload", string(msg.Payload)),
-	)
-
+	c.logger.Info(ctx, "websocket", "client", "Successfully connected")
 	return nil
 }
 
 // Close closes the WebSocket connection
 func (c *Client) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
-	select {
-	case <-c.done:
-		// Already closed
+	if c.conn == nil {
 		return nil
-	default:
-		close(c.done)
 	}
 
-	if c.conn != nil {
-		err := c.conn.Close()
-		c.conn = nil
+	ctx := context.Background()
+	c.logger.Info(ctx, "websocket", "client", "Closing connection")
+
+	err := c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	if err != nil {
+		c.logger.Warn(ctx, "websocket", "client", fmt.Sprintf("Error sending close message: %v", err))
+	}
+
+	if err := c.conn.Close(); err != nil {
+		c.logger.Error(ctx, "websocket", "client", fmt.Sprintf("Error closing connection: %v", err))
 		return err
 	}
+
+	c.conn = nil
 	return nil
 }
 
-// handleMessages handles incoming messages
-func (c *Client) handleMessages(doneCh chan struct{}, conn *websocket.Conn) {
-	for {
-		select {
-		case <-doneCh:
-			return
-		default:
-			var msg Message
-			if err := conn.ReadJSON(&msg); err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-					c.logger.Error("WebSocket read error",
-						zap.Error(err),
-					)
-				}
-				return
-			}
-
-			c.logger.Debug("Received message",
-				zap.String("type", msg.Type),
-				zap.String("payload", string(msg.Payload)),
-			)
-
-			// Get handler for message type
-			c.mu.RLock()
-			handler, ok := c.handlers[msg.Type]
-			c.mu.RUnlock()
-
-			if !ok {
-				c.logger.Warn("Unknown message type",
-					zap.String("type", msg.Type),
-				)
-				continue
-			}
-
-			// Handle message in a goroutine
-			go func(msgCopy Message, handlerCopy Handler) {
-				if err := handlerCopy.HandleMessage(context.Background(), conn, msgCopy); err != nil {
-					c.logger.Error("Failed to handle message",
-						zap.Error(err),
-						zap.String("type", msgCopy.Type),
-					)
-				}
-			}(msg, handler)
-		}
+// ReadMessage reads a message from the WebSocket connection
+func (c *Client) ReadMessage(ctx context.Context) (int, []byte, error) {
+	c.mutex.Lock()
+	if c.conn == nil {
+		c.mutex.Unlock()
+		return 0, nil, fmt.Errorf("not connected")
 	}
+	conn := c.conn
+	c.mutex.Unlock()
+
+	messageType, data, err := conn.ReadMessage()
+	if err != nil {
+		c.logger.Error(ctx, "websocket", "client", fmt.Sprintf("Error reading message: %v", err))
+		return 0, nil, err
+	}
+
+	c.logger.Info(ctx, "websocket", "client", fmt.Sprintf("Received message type %d with %d bytes", messageType, len(data)))
+	return messageType, data, nil
 }
 
-// SendAndWait sends a message and waits for a response
-func (c *Client) SendAndWait(ctx context.Context, msg Message, responseType string) (*Message, error) {
-	// Create response channel
-	responseCh := make(chan *Message, 1)
-	errCh := make(chan error, 1)
+// WriteMessage writes a message to the WebSocket connection
+func (c *Client) WriteMessage(ctx context.Context, messageType int, data []byte) error {
+	c.mutex.Lock()
+	if c.conn == nil {
+		c.mutex.Unlock()
+		return fmt.Errorf("not connected")
+	}
+	conn := c.conn
+	c.mutex.Unlock()
 
-	// Create temporary handler for response
-	handler := &responseHandler{
-		responseCh: responseCh,
-		errCh:      errCh,
+	if err := conn.WriteMessage(messageType, data); err != nil {
+		c.logger.Error(ctx, "websocket", "client", fmt.Sprintf("Error writing message: %v", err))
+		return err
 	}
 
-	// Register handler
-	c.RegisterHandler(responseType, handler)
-	defer func() {
-		c.mu.Lock()
-		delete(c.handlers, responseType)
-		c.mu.Unlock()
-	}()
-
-	// Send message
-	if err := c.Send(msg); err != nil {
-		return nil, err
-	}
-
-	// Wait for response or context cancellation
-	select {
-	case response := <-responseCh:
-		return response, nil
-	case err := <-errCh:
-		return nil, err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	c.logger.Info(ctx, "websocket", "client", fmt.Sprintf("Sent message type %d with %d bytes", messageType, len(data)))
+	return nil
 }
 
-// responseHandler handles response messages for SendAndWait
-type responseHandler struct {
-	responseCh chan *Message
-	errCh      chan error
+// WriteJSON writes a JSON message to the WebSocket connection
+func (c *Client) WriteJSON(ctx context.Context, v interface{}) error {
+	c.mutex.Lock()
+	if c.conn == nil {
+		c.mutex.Unlock()
+		return fmt.Errorf("not connected")
+	}
+	conn := c.conn
+	c.mutex.Unlock()
+
+	if err := conn.WriteJSON(v); err != nil {
+		c.logger.Error(ctx, "websocket", "client", fmt.Sprintf("Error writing JSON: %v", err))
+		return err
+	}
+
+	c.logger.Info(ctx, "websocket", "client", "Sent JSON message")
+	return nil
 }
 
-func (h *responseHandler) HandleMessage(ctx context.Context, conn *websocket.Conn, msg Message) error {
-	select {
-	case h.responseCh <- &msg:
-	default:
-		h.errCh <- fmt.Errorf("response channel full")
+// ReadJSON reads a JSON message from the WebSocket connection
+func (c *Client) ReadJSON(ctx context.Context, v interface{}) error {
+	c.mutex.Lock()
+	if c.conn == nil {
+		c.mutex.Unlock()
+		return fmt.Errorf("not connected")
 	}
+	conn := c.conn
+	c.mutex.Unlock()
+
+	if err := conn.ReadJSON(v); err != nil {
+		c.logger.Error(ctx, "websocket", "client", fmt.Sprintf("Error reading JSON: %v", err))
+		return err
+	}
+
+	c.logger.Info(ctx, "websocket", "client", "Received JSON message")
 	return nil
 }

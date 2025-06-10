@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
 
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
@@ -16,16 +16,16 @@ import (
 // StreamHandler handles WebSocket streaming
 type StreamHandler struct {
 	conn    *websocket.Conn
-	logger  *zap.Logger
+	logger  types.Logger
 	mu      sync.RWMutex
 	closed  atomic.Bool
 	writeMu sync.Mutex // Additional mutex for concurrent writes
 }
 
 // NewStreamHandler creates a new WebSocket stream handler
-func NewStreamHandler(conn *websocket.Conn, logger *zap.Logger) *StreamHandler {
+func NewStreamHandler(conn *websocket.Conn, logger types.Logger) *StreamHandler {
 	if logger == nil {
-		logger, _ = zap.NewProduction()
+		logger = types.NewNoOpLogger()
 	}
 	return &StreamHandler{
 		conn:   conn,
@@ -70,10 +70,7 @@ func (h *StreamHandler) WriteChunk(chunk types.StreamChunk) error {
 		return fmt.Errorf("failed to write message: %w", err)
 	}
 
-	h.logger.Debug("Wrote stream chunk",
-		zap.String("type", string(chunk.Type)),
-		zap.Int("size", len(data)),
-	)
+	h.logger.Info(context.Background(), "websocket", "writeChunk", "Wrote stream chunk of type "+string(chunk.Type))
 
 	return nil
 }
@@ -177,16 +174,16 @@ func (h *StreamHandler) Close() error {
 // StreamReader reads stream chunks from a WebSocket connection
 type StreamReader struct {
 	conn   *websocket.Conn
-	logger *zap.Logger
+	logger types.Logger
 	mu     sync.RWMutex
 	closed atomic.Bool
 	readMu sync.Mutex // Additional mutex for concurrent reads
 }
 
 // NewStreamReader creates a new WebSocket stream reader
-func NewStreamReader(conn *websocket.Conn, logger *zap.Logger) *StreamReader {
+func NewStreamReader(conn *websocket.Conn, logger types.Logger) *StreamReader {
 	if logger == nil {
-		logger, _ = zap.NewProduction()
+		logger = types.NewNoOpLogger()
 	}
 	return &StreamReader{
 		conn:   conn,
@@ -225,10 +222,7 @@ func (r *StreamReader) Read() (*types.StreamChunk, error) {
 		return nil, fmt.Errorf("failed to unmarshal chunk: %w", err)
 	}
 
-	r.logger.Debug("Read stream chunk",
-		zap.String("type", string(chunk.Type)),
-		zap.Int("size", len(data)),
-	)
+	r.logger.Info(context.Background(), "websocket", "readChunk", "Read stream chunk of type "+string(chunk.Type))
 
 	return chunk, nil
 }
@@ -259,7 +253,7 @@ type StreamPipe struct {
 }
 
 // NewStreamPipe creates a new WebSocket stream pipe
-func NewStreamPipe(conn *websocket.Conn, logger *zap.Logger) types.StreamPipe {
+func NewStreamPipe(conn *websocket.Conn, logger types.Logger) types.StreamPipe {
 	return &StreamPipe{
 		reader: NewStreamReader(conn, logger),
 		writer: NewStreamHandler(conn, logger),

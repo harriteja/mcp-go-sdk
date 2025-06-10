@@ -1,5 +1,9 @@
 package types
 
+import (
+	"context"
+)
+
 // LogLevel represents the severity level of a log message
 type LogLevel string
 
@@ -32,28 +36,43 @@ type LoggerConfig struct {
 	DefaultFields []LogField
 }
 
-// Logger defines the interface for structured logging
-//
-// Example usage:
-//
-//	logger.Info("User logged in",
-//	    LogField{Key: "user_id", Value: "123"},
-//	    LogField{Key: "ip", Value: "192.168.1.1"})
+// Logger provides level based logging.
 type Logger interface {
-	// Debug logs a debug message with optional structured fields
-	Debug(msg string, fields ...LogField)
-	// Info logs an informational message with optional structured fields
-	Info(msg string, fields ...LogField)
-	// Warn logs a warning message with optional structured fields
-	Warn(msg string, fields ...LogField)
-	// Error logs an error message with optional structured fields
-	Error(msg string, fields ...LogField)
-	// With returns a new logger with the given fields added to all messages
-	With(fields ...LogField) Logger
-	// WithSampling returns a new logger with sampling enabled
-	WithSampling(rate float64) Logger
-	// Flush ensures all logs are written before shutdown
-	Flush() error
+	// Access logs all access logs
+	Access(ctx context.Context, message string)
+
+	// Info logs all INFO level log messages.
+	Info(ctx context.Context, bucket, handler, message string)
+
+	// Warn logs all WARN level log messages.
+	Warn(ctx context.Context, bucket, handler, message string)
+
+	// Error logs all ERROR level log messages.
+	Error(ctx context.Context, bucket, handler, message string)
+
+	// Panic logs all PANIC level log messages.
+	// It raises a panic after logging.
+	Panic(ctx context.Context, bucket, handler, message string)
+
+	// V returns true if the verbosity is greater than or equal to n.
+	// Default verbosity is 0.
+	//
+	// Verbosity's set by `LOGGER_LEVEL` environment.
+	// To increase or decrease verbosity you can use `SubWithIncrement`
+	// which creates a new logger with modified verbosity.
+	V(n int) bool
+
+	// Sub returns a sub logger with `name` appended to current logger's bucket.
+	//
+	// Both Sub is lightweight as it's a clone of current logger with prefix modification.
+	// It doesn't create any new file descriptor
+	Sub(name string) Logger
+
+	// SubWithIncrement returns a sub logger with increased verbosity by n.
+	//
+	// SubWithIncrement is lightweight as it's a clone of current logger with modified prefix & verbosity.
+	// It doesn't create any new file descriptor
+	SubWithIncrement(name string, n int) Logger
 }
 
 // LoggerFactory creates and configures logger instances
@@ -62,22 +81,39 @@ type LoggerFactory interface {
 	CreateLogger(name string) Logger
 	// CreateLoggerWithConfig creates a new logger with specific configuration
 	CreateLoggerWithConfig(name string, config LoggerConfig) Logger
-	// WithFields returns a new logger factory with default fields
-	WithFields(fields ...LogField) LoggerFactory
 }
 
 // NoOpLogger implements Logger with no-op operations
-type NoOpLogger struct{}
+type NoOpLogger struct {
+	verbosity int
+	bucket    string
+}
 
-func (l *NoOpLogger) Debug(msg string, fields ...LogField) {}
-func (l *NoOpLogger) Info(msg string, fields ...LogField)  {}
-func (l *NoOpLogger) Warn(msg string, fields ...LogField)  {}
-func (l *NoOpLogger) Error(msg string, fields ...LogField) {}
-func (l *NoOpLogger) With(fields ...LogField) Logger       { return l }
-func (l *NoOpLogger) WithSampling(rate float64) Logger     { return l }
-func (l *NoOpLogger) Flush() error                         { return nil }
+func (l *NoOpLogger) Access(ctx context.Context, message string)                 {}
+func (l *NoOpLogger) Info(ctx context.Context, bucket, handler, message string)  {}
+func (l *NoOpLogger) Warn(ctx context.Context, bucket, handler, message string)  {}
+func (l *NoOpLogger) Error(ctx context.Context, bucket, handler, message string) {}
+func (l *NoOpLogger) Panic(ctx context.Context, bucket, handler, message string) { panic(message) }
+func (l *NoOpLogger) V(n int) bool                                               { return l.verbosity >= n }
+
+func (l *NoOpLogger) Sub(name string) Logger {
+	return &NoOpLogger{
+		verbosity: l.verbosity,
+		bucket:    l.bucket + "." + name,
+	}
+}
+
+func (l *NoOpLogger) SubWithIncrement(name string, n int) Logger {
+	return &NoOpLogger{
+		verbosity: l.verbosity + n,
+		bucket:    l.bucket + "." + name,
+	}
+}
 
 // NewNoOpLogger creates a new no-op logger
 func NewNoOpLogger() Logger {
-	return &NoOpLogger{}
+	return &NoOpLogger{
+		verbosity: 0,
+		bucket:    "root",
+	}
 }

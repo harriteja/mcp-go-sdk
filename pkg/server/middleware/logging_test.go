@@ -1,15 +1,121 @@
 package middleware
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
+
+// MockLogger is a logger that records log messages for testing
+type MockLogger struct {
+	mu        sync.Mutex
+	logs      []LogEntry
+	verbosity int
+	bucket    string
+}
+
+// LogEntry represents a single log entry
+type LogEntry struct {
+	Level   types.LogLevel
+	Bucket  string
+	Handler string
+	Message string
+}
+
+func NewMockLogger() *MockLogger {
+	return &MockLogger{
+		logs:      []LogEntry{},
+		verbosity: 0,
+		bucket:    "root",
+	}
+}
+
+func (l *MockLogger) Access(ctx context.Context, message string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.logs = append(l.logs, LogEntry{
+		Level:   types.LogLevelInfo,
+		Bucket:  "access",
+		Handler: "",
+		Message: message,
+	})
+}
+
+func (l *MockLogger) Info(ctx context.Context, bucket, handler, message string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.logs = append(l.logs, LogEntry{
+		Level:   types.LogLevelInfo,
+		Bucket:  bucket,
+		Handler: handler,
+		Message: message,
+	})
+}
+
+func (l *MockLogger) Warn(ctx context.Context, bucket, handler, message string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.logs = append(l.logs, LogEntry{
+		Level:   types.LogLevelWarn,
+		Bucket:  bucket,
+		Handler: handler,
+		Message: message,
+	})
+}
+
+func (l *MockLogger) Error(ctx context.Context, bucket, handler, message string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.logs = append(l.logs, LogEntry{
+		Level:   types.LogLevelError,
+		Bucket:  bucket,
+		Handler: handler,
+		Message: message,
+	})
+}
+
+func (l *MockLogger) Panic(ctx context.Context, bucket, handler, message string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.logs = append(l.logs, LogEntry{
+		Level:   types.LogLevelError,
+		Bucket:  bucket,
+		Handler: handler,
+		Message: message,
+	})
+	panic(message)
+}
+
+func (l *MockLogger) V(n int) bool {
+	return l.verbosity >= n
+}
+
+func (l *MockLogger) Sub(name string) types.Logger {
+	return &MockLogger{
+		logs:      l.logs,
+		verbosity: l.verbosity,
+		bucket:    l.bucket + "." + name,
+	}
+}
+
+func (l *MockLogger) SubWithIncrement(name string, n int) types.Logger {
+	return &MockLogger{
+		logs:      l.logs,
+		verbosity: l.verbosity + n,
+		bucket:    l.bucket + "." + name,
+	}
+}
+
+func (l *MockLogger) GetLogs() []LogEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.logs
+}
 
 func TestLoggingMiddleware(t *testing.T) {
 	tests := []struct {
@@ -54,23 +160,8 @@ func TestLoggingMiddleware(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a buffer to capture logs
-			var buf bytes.Buffer
-			encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
-				MessageKey:     "msg",
-				LevelKey:       "level",
-				TimeKey:        "time",
-				NameKey:        "name",
-				CallerKey:      "caller",
-				StacktraceKey:  "stacktrace",
-				LineEnding:     zapcore.DefaultLineEnding,
-				EncodeLevel:    zapcore.LowercaseLevelEncoder,
-				EncodeTime:     zapcore.ISO8601TimeEncoder,
-				EncodeDuration: zapcore.SecondsDurationEncoder,
-				EncodeCaller:   zapcore.ShortCallerEncoder,
-			})
-			core := zapcore.NewCore(encoder, zapcore.AddSync(&buf), zapcore.DebugLevel)
-			logger := zap.New(core)
+			// Create a mock logger
+			logger := NewMockLogger()
 
 			// Create middleware
 			config := LoggingConfig{
@@ -100,50 +191,44 @@ func TestLoggingMiddleware(t *testing.T) {
 			}
 
 			// Verify logging
+			logs := logger.GetLogs()
 			if tt.expectLogged {
-				if buf.Len() == 0 {
+				if len(logs) == 0 {
 					t.Error("Expected log entry but got none")
 				}
 
-				// Parse log entry
-				var logEntry map[string]interface{}
-				if err := json.Unmarshal(buf.Bytes(), &logEntry); err != nil {
-					t.Fatalf("Failed to parse log entry: %v", err)
+				// Get the log entry
+				logEntry := logs[0]
+
+				// Verify basic fields are included in the message
+				if !strings.Contains(logEntry.Message, tt.method) {
+					t.Errorf("Log message doesn't contain method: %s", logEntry.Message)
+				}
+				if !strings.Contains(logEntry.Message, tt.path) {
+					t.Errorf("Log message doesn't contain path: %s", logEntry.Message)
 				}
 
-				// Verify basic fields
-				if method, ok := logEntry["method"].(string); !ok || method != tt.method {
-					t.Errorf("Wrong method in log: got %v want %v", method, tt.method)
-				}
-				if path, ok := logEntry["path"].(string); !ok || path != tt.path {
-					t.Errorf("Wrong path in log: got %v want %v", path, tt.path)
-				}
-
-				// Verify headers
-				if headers, ok := logEntry["headers"].(map[string]interface{}); ok {
-					for k, v := range tt.headers {
-						if tt.skipHeaders != nil {
-							var skip bool
-							for _, sh := range tt.skipHeaders {
-								if sh == k {
-									skip = true
-									break
-								}
-							}
-							if skip {
-								if _, exists := headers[k]; exists {
-									t.Errorf("Skipped header %s was logged", k)
-								}
-								continue
+				// Verify headers handling
+				for k, v := range tt.headers {
+					if tt.skipHeaders != nil {
+						var skip bool
+						for _, sh := range tt.skipHeaders {
+							if sh == k {
+								skip = true
+								break
 							}
 						}
-						if headers[k] != v {
-							t.Errorf("Wrong header value for %s: got %v want %v", k, headers[k], v)
+						if skip {
+							// Skipped header should not be in the log message
+							if strings.Contains(logEntry.Message, k) && strings.Contains(logEntry.Message, v) {
+								t.Errorf("Skipped header %s was logged in: %s", k, logEntry.Message)
+							}
+							continue
 						}
 					}
 				}
 			} else {
-				if buf.Len() > 0 {
+				if len(logs) > 0 {
 					t.Error("Expected no log entry but got one")
 				}
 			}

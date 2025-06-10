@@ -3,10 +3,10 @@ package fiber
 import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
-	"go.uber.org/zap"
 
 	"github.com/harriteja/mcp-go-sdk/pkg/server"
 	"github.com/harriteja/mcp-go-sdk/pkg/server/transport"
+	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
 // Adapter provides Fiber adapter for MCP server
@@ -15,7 +15,7 @@ type Adapter struct {
 }
 
 // New creates a new Fiber adapter
-func New(srv *server.Server, logger *zap.Logger) *Adapter {
+func New(srv *server.Server, logger types.Logger) *Adapter {
 	return &Adapter{
 		transport: transport.NewHTTPTransport(srv, logger),
 	}

@@ -1,17 +1,20 @@
 package middleware
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
 	httputil "github.com/harriteja/mcp-go-sdk/pkg/server/transport/http"
-	"go.uber.org/zap"
+	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
 // LoggingConfig holds configuration for the logging middleware
 type LoggingConfig struct {
-	// Logger is the zap logger instance to use
-	Logger *zap.Logger
+	// Logger is the logger instance to use
+	Logger types.Logger
 	// SkipPaths are paths that should not be logged
 	SkipPaths []string
 	// SkipHeaders are headers that should not be logged
@@ -41,56 +44,55 @@ func LoggingMiddleware(config LoggingConfig) func(http.Handler) http.Handler {
 			start := time.Now()
 			ww := httputil.NewResponseWriter(w)
 
-			// Create fields for logging
-			fields := []zap.Field{
-				zap.String("method", r.Method),
-				zap.String("path", r.URL.Path),
-				zap.String("remote_addr", r.RemoteAddr),
-				zap.String("user_agent", r.UserAgent()),
+			// Process the request
+			next.ServeHTTP(ww, r)
+
+			// Use the logger
+			loggerInstance := config.Logger
+			if loggerInstance == nil {
+				loggerInstance = logger.GetDefaultLogger()
 			}
 
-			// Add headers (excluding skipped ones)
+			// Create log message
+			method := r.Method
+			path := r.URL.Path
+			status := ww.Status()
+			bytesWritten := ww.BytesWritten()
+			duration := time.Since(start)
+
+			// Headers (excluding skipped ones)
 			headers := make(map[string]string)
 			for k, v := range r.Header {
 				if !skipHeaders[k] && len(v) > 0 {
 					headers[k] = v[0]
 				}
 			}
-			if len(headers) > 0 {
-				fields = append(fields, zap.Any("headers", headers))
-			}
-
-			// Add query parameters
-			if query := r.URL.Query(); len(query) > 0 {
-				fields = append(fields, zap.Any("query", query))
-			}
-
-			// Process the request
-			next.ServeHTTP(ww, r)
-
-			// Add response information
-			duration := time.Since(start)
-			fields = append(fields,
-				zap.Int("status", ww.Status()),
-				zap.Int64("bytes_written", ww.BytesWritten()),
-				zap.Duration("duration", duration),
-			)
 
 			// Log based on status code
-			logger := config.Logger
-			if logger == nil {
-				logger, _ = zap.NewProduction()
+			ctx := context.Background()
+			logMsg := ""
+
+			if status >= 500 {
+				logMsg = "Server error"
+			} else if status >= 400 {
+				logMsg = "Client error"
+			} else if status >= 300 {
+				logMsg = "Redirection"
+			} else {
+				logMsg = "Success"
 			}
 
-			switch {
-			case ww.Status() >= 500:
-				logger.Error("Server error", fields...)
-			case ww.Status() >= 400:
-				logger.Warn("Client error", fields...)
-			case ww.Status() >= 300:
-				logger.Info("Redirection", fields...)
-			default:
-				logger.Info("Success", fields...)
+			// Format the message with all details
+			message := fmt.Sprintf("%s - %s %s - Status: %s - Bytes: %d - Duration: %s - Remote: %s - UserAgent: %s",
+				logMsg, method, path, http.StatusText(status), bytesWritten, duration.String(), r.RemoteAddr, r.UserAgent())
+
+			// Log with appropriate level based on status code
+			if status >= 500 {
+				loggerInstance.Error(ctx, "http", "middleware", message)
+			} else if status >= 400 {
+				loggerInstance.Warn(ctx, "http", "middleware", message)
+			} else {
+				loggerInstance.Info(ctx, "http", "middleware", message)
 			}
 		})
 	}

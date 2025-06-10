@@ -13,7 +13,8 @@ CLI_NAME=mcp
 all: test build cli
 
 build:
-	$(GOBUILD) -o bin/$(BINARY_NAME) -v ./...
+	mkdir -p bin
+	$(GOCMD) list -f '{{if eq .Name "main"}}{{ .ImportPath }}{{end}}' ./... | xargs -L1 go build -v -o bin/
 
 cli:
 	$(GOBUILD) -o bin/$(CLI_NAME) ./cmd/mcp
@@ -29,12 +30,7 @@ lint:
 
 clean:
 	$(GOCLEAN)
-	rm -f bin/$(BINARY_NAME)
-	rm -f bin/$(CLI_NAME)
-	rm -f bin/simple-tool
-	rm -f bin/simple-calculator
-	rm -f bin/simple-stdio
-	rm -f bin/simple-stdio-client
+	rm -rf bin/
 
 deps:
 	$(GOMOD) download

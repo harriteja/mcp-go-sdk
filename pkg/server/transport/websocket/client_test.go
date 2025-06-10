@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/harriteja/mcp-go-sdk/pkg/types"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
+	"github.com/stretchr/testify/require"
+
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
+	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
 type echoHandler struct{}
@@ -43,7 +45,7 @@ func (h *customTestHandler) HandleMessage(ctx context.Context, conn *websocket.C
 
 func TestClient(t *testing.T) {
 	// Create test logger
-	logger := zap.NewNop()
+	testLogger := logger.NewNopLogger()
 
 	// Create server
 	server := New(Options{
@@ -66,7 +68,7 @@ func TestClient(t *testing.T) {
 	client, err := NewClient(ClientOptions{
 		URL:              wsURL,
 		HandshakeTimeout: time.Second,
-		Logger:           logger,
+		Logger:           testLogger,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
@@ -151,13 +153,13 @@ func TestClient(t *testing.T) {
 
 func TestClient_ConnectionError(t *testing.T) {
 	// Create test logger
-	logger := zap.NewNop()
+	testLogger := logger.NewNopLogger()
 
 	// Try to connect to non-existent server
 	_, err := NewClient(ClientOptions{
 		URL:              "ws://localhost:12345",
 		HandshakeTimeout: time.Second,
-		Logger:           logger,
+		Logger:           testLogger,
 	})
 
 	if err == nil {
@@ -167,7 +169,7 @@ func TestClient_ConnectionError(t *testing.T) {
 
 func TestClient_CustomHeaders(t *testing.T) {
 	// Create test logger
-	logger := zap.NewNop()
+	testLogger := logger.NewNopLogger()
 
 	// Create server that checks headers
 	server := New(Options{
@@ -194,7 +196,7 @@ func TestClient_CustomHeaders(t *testing.T) {
 			URL:              wsURL,
 			Headers:          headers,
 			HandshakeTimeout: time.Second,
-			Logger:           logger,
+			Logger:           testLogger,
 		})
 		if err != nil {
 			t.Fatalf("Failed to connect with valid headers: %v", err)
@@ -211,7 +213,7 @@ func TestClient_CustomHeaders(t *testing.T) {
 			URL:              wsURL,
 			Headers:          headers,
 			HandshakeTimeout: time.Second,
-			Logger:           logger,
+			Logger:           testLogger,
 		})
 		if err == nil {
 			t.Error("Expected connection to be rejected")
@@ -221,7 +223,7 @@ func TestClient_CustomHeaders(t *testing.T) {
 
 func TestClient_Connect(t *testing.T) {
 	// Create test logger
-	logger := zap.NewNop()
+	testLogger := logger.NewNopLogger()
 
 	// Create test server
 	server := New(Options{
@@ -234,7 +236,7 @@ func TestClient_Connect(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	client, err := NewClient(ClientOptions{
 		URL:    wsURL,
-		Logger: logger,
+		Logger: testLogger,
 	})
 	assert.NoError(t, err)
 
@@ -249,7 +251,7 @@ func TestClient_Connect(t *testing.T) {
 
 func TestClient_SendMessage(t *testing.T) {
 	// Create test logger
-	logger := zap.NewNop()
+	testLogger := logger.NewNopLogger()
 
 	// Create test server
 	server := New(Options{
@@ -274,7 +276,7 @@ func TestClient_SendMessage(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	client, err := NewClient(ClientOptions{
 		URL:    wsURL,
-		Logger: logger,
+		Logger: testLogger,
 	})
 	assert.NoError(t, err)
 
@@ -296,7 +298,7 @@ func TestClient_SendMessage(t *testing.T) {
 
 func TestClient_SendMessageTimeout(t *testing.T) {
 	// Create test logger
-	logger := zap.NewNop()
+	testLogger := logger.NewNopLogger()
 
 	// Create test server
 	server := New(Options{
@@ -322,7 +324,7 @@ func TestClient_SendMessageTimeout(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	client, err := NewClient(ClientOptions{
 		URL:    wsURL,
-		Logger: logger,
+		Logger: testLogger,
 	})
 	assert.NoError(t, err)
 
@@ -342,7 +344,7 @@ func TestClient_SendMessageTimeout(t *testing.T) {
 
 func TestClient_Reconnect(t *testing.T) {
 	// Create test logger
-	logger := zap.NewNop()
+	testLogger := logger.NewNopLogger()
 
 	// Create test server
 	server := New(Options{
@@ -355,7 +357,7 @@ func TestClient_Reconnect(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
 	client, err := NewClient(ClientOptions{
 		URL:    wsURL,
-		Logger: logger,
+		Logger: testLogger,
 	})
 	assert.NoError(t, err)
 
@@ -372,4 +374,327 @@ func TestClient_Reconnect(t *testing.T) {
 	err = client.Connect()
 	assert.NoError(t, err)
 	assert.True(t, client.IsConnected())
+}
+
+func TestClientConnection(t *testing.T) {
+	// Create WebSocket server
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("Failed to upgrade connection: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		// Read first message
+		_, p, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("Failed to read message: %v", err)
+			return
+		}
+
+		// Echo the message back
+		if err := conn.WriteMessage(websocket.TextMessage, p); err != nil {
+			t.Fatalf("Failed to write message: %v", err)
+			return
+		}
+	}))
+	defer server.Close()
+
+	// Create WebSocket client
+	testLogger := logger.NewNopLogger()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	client, err := NewClient(ClientOptions{
+		URL:              wsURL,
+		ReconnectBackoff: 100 * time.Millisecond,
+		PingInterval:     1 * time.Second,
+		Logger:           testLogger,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	// Connect
+	err = client.Connect(context.Background())
+	require.NoError(t, err)
+
+	// Test sending and receiving
+	request := Request{
+		ID:     "test-id",
+		Method: "test-method",
+		Params: json.RawMessage(`{"test":"value"}`),
+	}
+	response, err := client.Call(context.Background(), request.Method, request.Params)
+	require.NoError(t, err)
+	assert.NotNil(t, response)
+
+	// Test close
+	err = client.Close()
+	require.NoError(t, err)
+}
+
+func TestClientReconnect(t *testing.T) {
+	// Skip if running in CI
+	if testing.Short() {
+		t.Skip("Skipping reconnection test in short mode")
+	}
+
+	// Create a channel to track connections
+	connections := make(chan struct{}, 2)
+
+	// Create WebSocket server that closes connection after first message
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connections <- struct{}{}
+
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("Failed to upgrade connection: %v", err)
+			return
+		}
+
+		// Read one message, then close
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			return
+		}
+
+		// Close connection after first message
+		conn.Close()
+	}))
+	defer server.Close()
+
+	// Create WebSocket client
+	testLogger := logger.NewNopLogger()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	client, err := NewClient(ClientOptions{
+		URL:              wsURL,
+		ReconnectBackoff: 100 * time.Millisecond,
+		PingInterval:     1 * time.Second,
+		MaxReconnect:     2,
+		Logger:           testLogger,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	// Connect
+	err = client.Connect(context.Background())
+	require.NoError(t, err)
+
+	// Send message to trigger connection close
+	go func() {
+		client.Call(context.Background(), "test-method", json.RawMessage(`{}`))
+	}()
+
+	// Wait for reconnect
+	select {
+	case <-connections:
+		// First connection established
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for first connection")
+	}
+
+	select {
+	case <-connections:
+		// Reconnection occurred
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for reconnection")
+	}
+
+	// Close the client
+	err = client.Close()
+	require.NoError(t, err)
+}
+
+func TestClientSendBeforeConnect(t *testing.T) {
+	testLogger := logger.NewNopLogger()
+	client, err := NewClient(ClientOptions{
+		URL:              "ws://localhost:12345", // Invalid URL to prevent actual connection
+		ReconnectBackoff: 100 * time.Millisecond,
+		Logger:           testLogger,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	// Try to send before connecting
+	_, err = client.Call(context.Background(), "test-method", json.RawMessage(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+}
+
+func TestClientContextCancellation(t *testing.T) {
+	// Create WebSocket server that never responds
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("Failed to upgrade connection: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		// Hang forever, never responding
+		select {}
+	}))
+	defer server.Close()
+
+	// Create WebSocket client
+	testLogger := logger.NewNopLogger()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	client, err := NewClient(ClientOptions{
+		URL:              wsURL,
+		ReconnectBackoff: 100 * time.Millisecond,
+		Logger:           testLogger,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	// Connect
+	err = client.Connect(context.Background())
+	require.NoError(t, err)
+
+	// Create a context that will be cancelled
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Send request with cancellable context
+	_, err = client.Call(ctx, "test-method", json.RawMessage(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context")
+}
+
+func TestClientCallTimeout(t *testing.T) {
+	// Create WebSocket server that never responds to specific methods
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("Failed to upgrade connection: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		for {
+			messageType, p, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+
+			var req Request
+			if err := json.Unmarshal(p, &req); err != nil {
+				return
+			}
+
+			// Only respond to non-timeout methods
+			if req.Method != "timeout-method" {
+				resp := Response{
+					ID:     req.ID,
+					Result: json.RawMessage(`{"success":true}`),
+				}
+				respData, _ := json.Marshal(resp)
+				conn.WriteMessage(messageType, respData)
+			}
+			// Otherwise, don't respond to simulate timeout
+		}
+	}))
+	defer server.Close()
+
+	// Create WebSocket client with short timeout
+	testLogger := logger.NewNopLogger()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	client, err := NewClient(ClientOptions{
+		URL:              wsURL,
+		ReconnectBackoff: 100 * time.Millisecond,
+		CallTimeout:      100 * time.Millisecond,
+		Logger:           testLogger,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	// Connect
+	err = client.Connect(context.Background())
+	require.NoError(t, err)
+
+	// Call method that will time out
+	_, err = client.Call(context.Background(), "timeout-method", json.RawMessage(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout")
+
+	// Call method that will succeed
+	resp, err := client.Call(context.Background(), "normal-method", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
+}
+
+func TestClientErrorResponse(t *testing.T) {
+	// Create WebSocket server that returns error for specific methods
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("Failed to upgrade connection: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		for {
+			messageType, p, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+
+			var req Request
+			if err := json.Unmarshal(p, &req); err != nil {
+				return
+			}
+
+			var resp Response
+			if req.Method == "error-method" {
+				resp = Response{
+					ID: req.ID,
+					Error: &types.Error{
+						Code:    400,
+						Message: "Test error",
+					},
+				}
+			} else {
+				resp = Response{
+					ID:     req.ID,
+					Result: json.RawMessage(`{"success":true}`),
+				}
+			}
+
+			respData, _ := json.Marshal(resp)
+			conn.WriteMessage(messageType, respData)
+		}
+	}))
+	defer server.Close()
+
+	// Create WebSocket client
+	testLogger := logger.NewNopLogger()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	client, err := NewClient(ClientOptions{
+		URL:              wsURL,
+		ReconnectBackoff: 100 * time.Millisecond,
+		Logger:           testLogger,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	// Connect
+	err = client.Connect(context.Background())
+	require.NoError(t, err)
+
+	// Call method that will return error
+	_, err = client.Call(context.Background(), "error-method", json.RawMessage(`{}`))
+	require.Error(t, err)
+	mcpErr, ok := types.IsError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, mcpErr.Code)
+	assert.Equal(t, "Test error", mcpErr.Message)
+
+	// Call method that will succeed
+	resp, err := client.Call(context.Background(), "normal-method", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
 }

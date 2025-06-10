@@ -8,7 +8,6 @@ import (
 	"github.com/harriteja/mcp-go-sdk/pkg/server/transport/http"
 	"github.com/harriteja/mcp-go-sdk/pkg/server/transport/websocket"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
-	"go.uber.org/zap"
 )
 
 // Type represents a transport type
@@ -27,18 +26,8 @@ type Factory struct {
 }
 
 // NewFactory creates a new transport factory
-func NewFactory(zapLogger *zap.Logger) *Factory {
-	if zapLogger == nil {
-		zapLogger, _ = zap.NewProduction()
-	}
-
-	// Create default logger config
-	config := &types.LoggerConfig{
-		MinLevel:       types.LogLevelInfo,
-		EnableSampling: false,
-	}
-
-	return &Factory{logger: logger.NewZapLogger(zapLogger, config)}
+func NewFactory() *Factory {
+	return &Factory{logger: logger.GetDefaultLogger()}
 }
 
 // Create creates a new transport instance

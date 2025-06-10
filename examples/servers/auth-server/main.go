@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -22,14 +20,40 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// LegacyLoggerAdapter adapts the new Logger interface to the old one
+type LegacyLoggerAdapter struct {
+	logger types.Logger
+}
+
+func (l *LegacyLoggerAdapter) Info(msg string, fields ...types.LogField) {
+	ctx := context.Background()
+	l.logger.Info(ctx, "auth", "server", msg)
+}
+
+func (l *LegacyLoggerAdapter) Warn(msg string, fields ...types.LogField) {
+	ctx := context.Background()
+	l.logger.Warn(ctx, "auth", "server", msg)
+}
+
+func (l *LegacyLoggerAdapter) Error(msg string, fields ...types.LogField) {
+	ctx := context.Background()
+	l.logger.Error(ctx, "auth", "server", msg)
+}
+
+func NewLegacyLoggerAdapter(logger types.Logger) *LegacyLoggerAdapter {
+	return &LegacyLoggerAdapter{logger: logger}
+}
+
+// User represents a registered user
 type User struct {
 	Username string `json:"username"`
 	Password string `json:"password,omitempty"`
 	Role     string `json:"role"`
 }
 
+// AuthService provides authentication and authorization services
 type AuthService struct {
-	logger    types.Logger
+	logger    *LegacyLoggerAdapter
 	metrics   types.MetricsCollector
 	users     map[string]User
 	userMutex sync.RWMutex
@@ -43,7 +67,11 @@ type AuthService struct {
 	requestDuration types.Metric
 }
 
+// NewAuthService creates a new AuthService
 func NewAuthService(logger types.Logger, metrics types.MetricsCollector, jwtKey string, rateLimit int) (*AuthService, error) {
+	// Create adapter for legacy logger interface
+	legacyLogger := NewLegacyLoggerAdapter(logger)
+
 	// Create metrics
 	loginAttempts, err := metrics.NewMetric(types.MetricOpts{
 		Name: "auth_login_attempts_total",
@@ -97,7 +125,7 @@ func NewAuthService(logger types.Logger, metrics types.MetricsCollector, jwtKey 
 	}
 
 	return &AuthService{
-		logger:          logger,
+		logger:          legacyLogger,
 		metrics:         metrics,
 		users:           make(map[string]User),
 		jwtKey:          []byte(jwtKey),
@@ -109,16 +137,19 @@ func NewAuthService(logger types.Logger, metrics types.MetricsCollector, jwtKey 
 	}, nil
 }
 
+// LoginRequest represents a login request
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
+// LoginResponse represents a login response
 type LoginResponse struct {
 	Token string `json:"token"`
 	Error string `json:"error,omitempty"`
 }
 
+// HandleRegister handles user registration
 func (s *AuthService) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	timer := s.metrics.NewTimer("auth_request_duration_seconds", types.MetricLabel{Name: "endpoint", Value: "register"})
 	defer timer.ObserveDuration()
@@ -297,8 +328,7 @@ func main() {
 	flag.Parse()
 
 	// Initialize logger
-	loggerFactory := logger.NewZapLoggerFactory(logger.DefaultZapConfig())
-	log := loggerFactory.CreateLogger("auth-server")
+	log := logger.GetDefaultLogger()
 
 	// Initialize metrics collector
 	metricsCollector := metrics.NewPrometheusCollector(prometheus.NewRegistry())
@@ -306,7 +336,8 @@ func main() {
 	// Create auth service
 	authService, err := NewAuthService(log, metricsCollector, *jwtKey, *rateLimit)
 	if err != nil {
-		log.Error("Failed to create auth service", types.LogField{Key: "error", Value: err.Error()})
+		ctx := context.Background()
+		log.Error(ctx, "main", "init", fmt.Sprintf("Failed to create auth service: %s", err.Error()))
 		os.Exit(1)
 	}
 
@@ -323,33 +354,17 @@ func main() {
 		mux.Handle("/metrics", promhttp.HandlerFor(collector.GetRegistry(), promhttp.HandlerOpts{}))
 	}
 
-	// Create HTTP server
+	// Start HTTP server
 	server := &http.Server{
 		Addr:         *addr,
 		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
 	}
 
-	// Start server
-	go func() {
-		log.Info("Starting server", types.LogField{Key: "addr", Value: *addr})
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error("Failed to start server", types.LogField{Key: "error", Value: err.Error()})
-			os.Exit(1)
-		}
-	}()
-
-	// Wait for interrupt signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-
-	// Graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := server.Shutdown(ctx); err != nil {
-		log.Error("Failed to stop server gracefully", types.LogField{Key: "error", Value: err.Error()})
+	ctx := context.Background()
+	log.Info(ctx, "main", "server", fmt.Sprintf("Starting server on %s", *addr))
+	if err := server.ListenAndServe(); err != nil {
+		log.Error(ctx, "main", "server", fmt.Sprintf("Server error: %s", err.Error()))
 	}
 }

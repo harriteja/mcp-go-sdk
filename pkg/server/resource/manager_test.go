@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 
+	"github.com/harriteja/mcp-go-sdk/pkg/logger"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
 )
 
@@ -50,7 +50,7 @@ func TestManager_Read(t *testing.T) {
 		ResourceHandler: handler,
 		CacheEnabled:    true,
 		CacheTTL:        time.Second,
-		Logger:          zap.NewNop(),
+		Logger:          logger.NewNopLogger(),
 	})
 
 	// First read should hit the handler
@@ -87,7 +87,7 @@ func TestManager_CacheEviction(t *testing.T) {
 		ResourceHandler: handler,
 		CacheEnabled:    true,
 		MaxCacheSize:    20, // Only enough for 2 entries
-		Logger:          zap.NewNop(),
+		Logger:          logger.NewNopLogger(),
 	})
 
 	// Fill cache
@@ -126,7 +126,7 @@ func TestManager_ListTemplates(t *testing.T) {
 	// Create manager
 	mgr := New(Options{
 		TemplateHandler: handler,
-		Logger:          zap.NewNop(),
+		Logger:          logger.NewNopLogger(),
 	})
 
 	// List templates
@@ -147,7 +147,7 @@ func TestManager_NoCache(t *testing.T) {
 	mgr := New(Options{
 		ResourceHandler: handler,
 		CacheEnabled:    false,
-		Logger:          zap.NewNop(),
+		Logger:          logger.NewNopLogger(),
 	})
 
 	// Multiple reads should always hit the handler
