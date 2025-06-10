@@ -11,12 +11,13 @@ import (
 
 func TestServer_Initialize(t *testing.T) {
 	logger := types.NewNoOpLogger()
-	srv := New(Options{
+	srv, err := New(&Options{
 		Name:         "test-server",
 		Version:      "1.0.0",
 		Instructions: "Test server",
 		Logger:       logger,
 	})
+	assert.NoError(t, err)
 
 	req := &types.InitializeRequest{
 		ProtocolVersion: "1.0",
@@ -37,11 +38,12 @@ func TestServer_Initialize(t *testing.T) {
 
 func TestServer_ListTools(t *testing.T) {
 	logger := types.NewNoOpLogger()
-	srv := New(Options{
+	srv, err := New(&Options{
 		Name:    "test-server",
 		Version: "1.0.0",
 		Logger:  logger,
 	})
+	assert.NoError(t, err)
 
 	// Test without handler
 	tools, err := srv.ListTools(context.Background())
@@ -67,11 +69,12 @@ func TestServer_ListTools(t *testing.T) {
 
 func TestServer_CallTool(t *testing.T) {
 	logger := types.NewNoOpLogger()
-	srv := New(Options{
+	srv, err := New(&Options{
 		Name:    "test-server",
 		Version: "1.0.0",
 		Logger:  logger,
 	})
+	assert.NoError(t, err)
 
 	// Test without handler
 	result, err := srv.CallTool(context.Background(), "test-tool", nil)
@@ -95,11 +98,12 @@ func TestServer_CallTool(t *testing.T) {
 
 func TestServer_GetSession(t *testing.T) {
 	logger := types.NewNoOpLogger()
-	srv := New(Options{
+	srv, err := New(&Options{
 		Name:    "test-server",
 		Version: "1.0.0",
 		Logger:  logger,
 	})
+	assert.NoError(t, err)
 
 	// Test non-existent session
 	session, err := srv.getSession("non-existent")

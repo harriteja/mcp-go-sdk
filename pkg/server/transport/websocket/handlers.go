@@ -237,15 +237,11 @@ func sendResponse(conn *websocket.Conn, msgType string, data interface{}) error 
 // sendErrorResponse sends an error response message
 func sendErrorResponse(conn *websocket.Conn, msgType string, err error) error {
 	var mcpErr *types.Error
-	code := 500
-	message := err.Error()
 
 	if e, ok := types.IsError(err); ok {
 		mcpErr = e
-		code = e.Code
-		message = e.Message
 	} else {
-		mcpErr = types.NewError(code, message)
+		mcpErr = types.NewError(500, err.Error())
 	}
 
 	errPayload, err := json.Marshal(mcpErr)

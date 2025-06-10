@@ -114,10 +114,11 @@ func (h *serverHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func TestServerIntegration(t *testing.T) {
 	// Create server and register handlers
-	srv := server.New(server.Options{
+	srv, err := server.New(&server.Options{
 		Name:    "test-server",
 		Version: "1.0.0",
 	})
+	require.NoError(t, err)
 
 	// Register test tool
 	srv.OnListTools(func(ctx context.Context) ([]types.Tool, error) {
@@ -210,10 +211,11 @@ func TestServerIntegration(t *testing.T) {
 func TestServerWithErrors(t *testing.T) {
 	// Create server that fails after 3 requests
 	var requestCount int
-	srv := server.New(server.Options{
+	srv, err := server.New(&server.Options{
 		Name:    "test-server",
 		Version: "1.0.0",
 	})
+	require.NoError(t, err)
 
 	srv.OnListTools(func(ctx context.Context) ([]types.Tool, error) {
 		requestCount++

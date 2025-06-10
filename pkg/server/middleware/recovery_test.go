@@ -51,9 +51,11 @@ func TestRecoveryMiddleware(t *testing.T) {
 				config.OnPanic = func(w http.ResponseWriter, r *http.Request, err interface{}) {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{
+					if err := json.NewEncoder(w).Encode(map[string]string{
 						"custom_error": "handled panic: " + err.(string),
-					})
+					}); err != nil {
+						t.Logf("Failed to encode response: %v", err)
+					}
 				}
 			}
 

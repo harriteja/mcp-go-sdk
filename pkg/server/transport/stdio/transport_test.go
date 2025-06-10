@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/harriteja/mcp-go-sdk/pkg/server"
 	"github.com/harriteja/mcp-go-sdk/pkg/types"
@@ -15,10 +16,11 @@ import (
 
 func TestTransport_Initialize(t *testing.T) {
 	// Create test server
-	srv := server.New(server.Options{
+	srv, err := server.New(&server.Options{
 		Name:    "test-server",
 		Version: "1.0.0",
 	})
+	require.NoError(t, err)
 
 	// Create test pipes
 	inputReader, inputWriter := io.Pipe()
@@ -87,10 +89,11 @@ func TestTransport_Initialize(t *testing.T) {
 
 func TestTransport_ListTools(t *testing.T) {
 	// Create test server
-	srv := server.New(server.Options{
+	srv, err := server.New(&server.Options{
 		Name:    "test-server",
 		Version: "1.0.0",
 	})
+	require.NoError(t, err)
 
 	// Register test tool
 	srv.OnListTools(func(ctx context.Context) ([]types.Tool, error) {
@@ -162,10 +165,11 @@ func TestTransport_ListTools(t *testing.T) {
 
 func TestTransport_Error(t *testing.T) {
 	// Create test server
-	srv := server.New(server.Options{
+	srv, err := server.New(&server.Options{
 		Name:    "test-server",
 		Version: "1.0.0",
 	})
+	require.NoError(t, err)
 
 	// Create test pipes
 	inputReader, inputWriter := io.Pipe()
